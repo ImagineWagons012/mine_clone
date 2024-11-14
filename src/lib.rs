@@ -1,3 +1,4 @@
+use wgpu::util::DeviceExt;
 use winit::window::Window;
 use winit::{
     event::*,
@@ -5,6 +6,40 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::WindowBuilder,
 };
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [0.0, 0.5, 0.0],
+        color: [1.0, 0.0, 0.0],
+    },
+    Vertex {
+        position: [-0.5, -0.5, 0.0],
+        color: [0.0, 1.0, 0.0],
+    },
+    Vertex {
+        position: [0.5, -0.5, 0.0],
+        color: [0.0, 0.0, 1.0],
+    },
+];
 
 struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -17,6 +52,7 @@ struct State<'a> {
     // unsafe references to the window's resources.
     window: &'a Window,
     render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
 }
 
 impl<'a> State<'a> {
@@ -87,13 +123,14 @@ impl<'a> State<'a> {
                 bind_group_layouts: &[],
                 push_constant_ranges: &[],
             });
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main", // 1.
-                buffers: &[],           // 2.
+                entry_point: "vs_main",
+                buffers: &[Vertex::desc()],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -130,6 +167,12 @@ impl<'a> State<'a> {
             cache: None,     // 6.
         });
 
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         Self {
             window,
             surface,
@@ -138,11 +181,12 @@ impl<'a> State<'a> {
             config,
             size,
             render_pipeline,
+            vertex_buffer,
         }
     }
 
     pub fn window(&self) -> &Window {
-        &self.window
+        self.window
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
@@ -150,11 +194,15 @@ impl<'a> State<'a> {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            self.configure();
         }
     }
 
-    fn input(&mut self, event: &WindowEvent) -> bool {
+    fn configure(&mut self) {
+        self.surface.configure(&self.device, &self.config);
+    }
+
+    fn input(&mut self, _event: &WindowEvent) -> bool {
         false
     }
 
@@ -172,7 +220,7 @@ impl<'a> State<'a> {
             });
 
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -191,6 +239,10 @@ impl<'a> State<'a> {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..3, 0..1);
         }
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -206,7 +258,7 @@ pub async fn run() {
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
     let mut state = State::new(&window).await;
-    let mut surface_configured = true;
+    let mut surface_configured = false;
 
     let _ = event_loop.run(move |event, control_flow| match event {
         Event::WindowEvent {
@@ -233,7 +285,8 @@ pub async fn run() {
                         state.window().request_redraw();
 
                         if !surface_configured {
-                            return;
+                            state.configure();
+                            surface_configured = true;
                         }
 
                         state.update();
