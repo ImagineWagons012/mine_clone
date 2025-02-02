@@ -9,7 +9,7 @@ use winit::{
 
 mod camera;
 mod texture;
-use camera::Camera;
+use camera::{Camera, CameraController};
 use texture::Texture;
 
 #[repr(C)]
@@ -71,6 +71,9 @@ struct State<'a> {
     bind_groups: [wgpu::BindGroup; 2],
     _textures: [Texture; 1],
     camera: Camera,
+    camera_uniform: camera::Uniform,
+    camera_buffer: wgpu::Buffer,
+    camera_controller: CameraController,
 }
 
 impl<'a> State<'a> {
@@ -283,6 +286,8 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
+        let camera_controller = CameraController::new(0.001);
+
         Self {
             window,
             surface,
@@ -296,6 +301,9 @@ impl<'a> State<'a> {
             bind_groups: [grass_bind_group, camera_bind_group],
             _textures: [grass_texture],
             camera,
+            camera_buffer,
+            camera_uniform,
+            camera_controller,
         }
     }
 
@@ -316,11 +324,19 @@ impl<'a> State<'a> {
         self.surface.configure(&self.device, &self.config);
     }
 
-    fn input(&mut self, _event: &WindowEvent) -> bool {
-        false
+    fn input(&mut self, event: &WindowEvent) -> bool {
+        self.camera_controller.process_events(event)
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        self.camera_controller.update_camera(&mut self.camera);
+        self.camera_uniform.update_view_proj(&self.camera);
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
+    }
 
     fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
