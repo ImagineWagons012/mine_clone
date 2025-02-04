@@ -1,11 +1,11 @@
 use wgpu::{Device, util::DeviceExt};
 
-use cgmath::Vector3;
+use cgmath::{vec3, Vector3};
 
 use crate::texture::Texture;
 use crate::Vertex;
 
-const VERTICES: &[Vertex] = &[
+pub const VERTICES: &[Vertex] = &[
     // bottom right
     Vertex {
         position: [0.5, -0.5, 0.0],
@@ -38,11 +38,17 @@ const VERTICES: &[Vertex] = &[
     },
 ];
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct TransformUnifrom {
+    trans: [[f32; 4]; 4],
+}
 
 pub struct Block {
     pos: Vector3<f32>,
     texture: Texture,
-    vertex_buffer: wgpu::Buffer,
+    pub vertex_buffer: wgpu::Buffer,
+    pub block_uniform: TransformUnifrom,
 }
 
 impl Block {
@@ -53,7 +59,8 @@ impl Block {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-
-        Block { pos, texture: texture, vertex_buffer }
+        let trans = cgmath::Matrix4::from_translation(pos);
+        let block_uniform = TransformUnifrom { trans: trans.into() };
+        Block { pos, texture, vertex_buffer, block_uniform }
     }
 }

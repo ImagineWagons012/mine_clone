@@ -1,7 +1,7 @@
 use cgmath::{vec3, Vector3};
 use winit::{event::WindowEvent, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{Texture, Camera, CameraController, camera, Vertex, Block};
+use crate::{block, camera, Block, Camera, CameraController, Texture, Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -228,6 +228,7 @@ impl<'a> State<'a> {
         let camera_controller = CameraController::new(0.001);
 
         let block = Block::new(&device, vec3(0.0, 0.0, 0.0), grass_texture);
+        
 
         Self {
             window,
@@ -312,8 +313,8 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            // render_pass.set_vertex_buffer(0, self.slice(..));
-            render_pass.draw(0..4, 0..1);
+            render_pass.set_vertex_buffer(0, self.block.vertex_buffer.slice(..));
+            render_pass.draw(0..block::VERTICES.len() as u32, 0..1);
         }
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));
