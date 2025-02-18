@@ -1,7 +1,28 @@
-use cgmath::{vec3, Vector3};
 use winit::{event::WindowEvent, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{block, camera, Block, Camera, CameraController, Texture, Vertex};
+use crate::{Instance, InstanceRaw, camera, world::{self, Chunk}, Camera, CameraController, Texture, Vertex};
+
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+
+const DEPTH_VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [1.0, 0.0, 0.0],
+        tex_coord: [1.0, 1.0, -1.0],
+    },
+    Vertex {
+        position: [1.0, 1.0, 0.0],
+        tex_coord: [1.0, 0.0, -1.0],
+    },
+    Vertex {
+        position: [0.0, 0.0, 0.0],
+        tex_coord: [0.0, 1.0, -1.0],
+    },
+    Vertex {
+        position: [0.0, 1.0, 0.0],
+        tex_coord: [0.0, 0.0, -1.0],
+    },
+];
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -13,13 +34,17 @@ pub struct State<'a> {
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
     pub window: &'a Window,
-    pub render_pipeline: wgpu::RenderPipeline,
-    pub bind_groups: [wgpu::BindGroup; 2],
-    pub camera: Camera,
-    pub camera_uniform: camera::Uniform,
-    pub camera_buffer: wgpu::Buffer,
-    pub camera_controller: CameraController,
-    pub block: Block
+    render_pipeline: wgpu::RenderPipeline,
+    bind_groups: [wgpu::BindGroup; 2],
+    camera: Camera,
+    camera_uniform: camera::Uniform,
+    camera_buffer: wgpu::Buffer,
+    camera_controller: CameraController,
+    depth_texture: Texture,
+    vertex_buffer: wgpu::Buffer,
+    world: Chunk,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
 }
 
 impl<'a> State<'a> {
@@ -30,7 +55,7 @@ impl<'a> State<'a> {
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: wgpu::Backends::VULKAN,
             ..Default::default()
         });
 
@@ -107,6 +132,42 @@ impl<'a> State<'a> {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // This should match the filterable field of the
+                        // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // This should match the filterable field of the
+                        // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
                 ],
                 label: Some("texture_bind_group_layout"),
             });
@@ -132,14 +193,26 @@ impl<'a> State<'a> {
                 push_constant_ranges: &[],
             });
 
+        let world = world::Chunk::new();
+
+            
+        let instances = world.generate_instances();
+
+        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+            label: Some("vertex_buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Vertex::desc(), InstanceRaw::desc()],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -149,7 +222,7 @@ impl<'a> State<'a> {
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -163,7 +236,17 @@ impl<'a> State<'a> {
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: None,
+            depth_stencil: Some(wgpu::DepthStencilState{
+                format: Texture::DEPTH_FORMAT,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 2, // Corresponds to bilinear filtering
+                    slope_scale: 2.0,
+                    clamp: 0.0,
+                },
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1,
                 mask: !0,
@@ -180,8 +263,12 @@ impl<'a> State<'a> {
             "grass_side",
         )
         .unwrap();
+        let grass_top_texture = Texture::from_bytes(&device, &queue, include_bytes!("../assets/textures/grass_top.png"), "grass top").unwrap();
+    
+        let depth_texture = Texture::create_depth_texture(&device, &config, "depth_texture");
+        let dirt_texture = Texture::from_bytes(&device, &queue, include_bytes!("../assets/textures/dirt.png"), "dirt texture").unwrap();
 
-        let grass_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let grass_block_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &texture_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -192,19 +279,35 @@ impl<'a> State<'a> {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&grass_texture.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&grass_top_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&grass_top_texture.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&dirt_texture.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&dirt_texture.sampler),
+                },
             ],
-            label: Some("diffuse_bind_group"),
+            label: Some("grass_side_bind_group"),
         });
-
+        
 
         let camera = Camera {
-            eye: (0.0, 0.0, 2.0).into(),
-            target: (0.0, 0.0, 0.0).into(),
+            eye: (0., 1., 2.).into(),
+            target: (0., 1., 0.5).into(),
             up: cgmath::Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
+            fovy: 70.0,
             znear: 0.1,
-            zfar: 100.0,
+            zfar: 160.0,
         };
 
         let mut camera_uniform = camera::Uniform::new();
@@ -225,10 +328,15 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let camera_controller = CameraController::new(0.001);
+        let camera_controller = CameraController::new(0.005);
 
-        let block = Block::new(&device, vec3(0.0, 0.0, 0.0), grass_texture);
-        
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+            label: Some("vertex_buffer"),
+            contents: bytemuck::cast_slice(&world.generate_mesh()),
+            usage: wgpu::BufferUsages::VERTEX
+        });
+
 
         Self {
             window,
@@ -238,12 +346,16 @@ impl<'a> State<'a> {
             config,
             size,
             render_pipeline,
-            bind_groups: [grass_bind_group, camera_bind_group],
+            bind_groups: [grass_block_bind_group, camera_bind_group],
             camera,
             camera_buffer,
             camera_uniform,
             camera_controller,
-            block
+            depth_texture,
+            vertex_buffer,
+            world,
+            instances,
+            instance_buffer,
         }
     }
 
@@ -258,6 +370,8 @@ impl<'a> State<'a> {
             self.config.height = new_size.height;
             self.configure();
         }
+        self.camera.aspect = self.config.width as f32 / self.config.height as f32;
+        self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
     }
 
     pub fn configure(&mut self) {
@@ -305,7 +419,14 @@ impl<'a> State<'a> {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment{
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations{
+                        load: wgpu::LoadOp::Clear(100.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
@@ -313,8 +434,9 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            render_pass.set_vertex_buffer(0, self.block.vertex_buffer.slice(..));
-            render_pass.draw(0..block::VERTICES.len() as u32, 0..1);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.draw(0..36 as u32, 0..self.instances.len() as u32);
         }
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));

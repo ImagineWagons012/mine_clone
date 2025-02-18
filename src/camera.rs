@@ -1,3 +1,4 @@
+use wgpu::SurfaceConfiguration;
 use winit::{
     event::{ElementState, KeyEvent, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
@@ -56,6 +57,8 @@ pub struct CameraController {
     is_backward_pressed: bool,
     is_left_pressed: bool,
     is_right_pressed: bool,
+    is_space_pressed: bool,
+    is_shift_pressed: bool,
 }
 
 impl CameraController {
@@ -66,6 +69,8 @@ impl CameraController {
             is_backward_pressed: false,
             is_left_pressed: false,
             is_right_pressed: false,
+            is_space_pressed: false,
+            is_shift_pressed: false,
         }
     }
 
@@ -96,6 +101,14 @@ impl CameraController {
                     }
                     KeyCode::KeyD | KeyCode::ArrowRight => {
                         self.is_right_pressed = is_pressed;
+                        true
+                    }
+                    KeyCode::Space => {
+                        self.is_space_pressed = is_pressed;
+                        true
+                    }
+                    KeyCode::ShiftLeft => {
+                        self.is_shift_pressed = is_pressed;
                         true
                     }
                     _ => false,
@@ -130,10 +143,21 @@ impl CameraController {
             // Rescale the distance between the target and the eye so
             // that it doesn't change. The eye, therefore, still
             // lies on the circle made by the target and eye.
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
         }
         if self.is_left_pressed {
-            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
+            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+        }
+
+        // Redo radius calc in case the left/right is pressed.
+        let forward = camera.target - camera.eye;
+        let forward_mag = forward.magnitude();
+
+        if self.is_space_pressed {
+            camera.eye = camera.target - (forward - camera.up * self.speed).normalize() * forward_mag;
+        }
+        if self.is_shift_pressed {
+            camera.eye = camera.target - (forward + camera.up * self.speed).normalize() * forward_mag;
         }
     }
 }
