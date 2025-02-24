@@ -1,4 +1,5 @@
-use block::Block;
+#![allow(dead_code)]
+
 use winit::{
     event::*,
     event_loop::EventLoop,
@@ -11,6 +12,7 @@ mod texture;
 mod block;
 mod state;
 mod world;
+mod time;
 
 use state::State;
 use camera::{Camera, CameraController};
@@ -100,13 +102,18 @@ impl InstanceRaw {
 
 
 pub async fn run() {
-    env_logger::init();
+    env_logger::builder()
+    .target(env_logger::Target::Stdout)
+    .format_timestamp(None)
+    .filter_level(log::LevelFilter::Info)
+    .init();
+
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
 
     let mut state = State::new(&window).await;
     window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(window.current_monitor().unwrap()))));
-    let mut surface_configured = false;
+    state.configure();
 
     let _ = event_loop.run(move |event, control_flow| match event {
         Event::WindowEvent {
@@ -129,13 +136,9 @@ pub async fn run() {
                         ..
                     } => control_flow.exit(),
                     WindowEvent::RedrawRequested => {
+                        state.time.set_frame_start_time();
                         // This tells winit that we want another frame after this one
                         state.window().request_redraw();
-
-                        if !surface_configured {
-                            state.configure();
-                            surface_configured = true;
-                        }
 
                         state.update();
                         match state.render() {
@@ -155,6 +158,12 @@ pub async fn run() {
                                 log::warn!("Surface timeout")
                             }
                         }
+                        state.time.update_frame_time();
+                        log::info!(
+                            "frame time: {}, fps: {}, CPU time: {}, GPU time: {}", 
+                            state.time.delta_time() * 1000.0, 1.0 / state.time.delta_time(), 
+                            state.time.cpu_time() * 1000.0, state.time.gpu_time() * 1000.0
+                        );
                     }
                     _ => {}
                 }
