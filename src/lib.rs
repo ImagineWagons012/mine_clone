@@ -7,12 +7,12 @@ use winit::{
     window::WindowBuilder,
 };
 
-mod camera;
 mod texture;
 mod block;
 mod state;
 mod world;
 mod time;
+mod camera;
 
 use state::State;
 use camera::{Camera, CameraController};
@@ -113,9 +113,18 @@ pub async fn run() {
 
     let mut state = State::new(&window).await;
     window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(window.current_monitor().unwrap()))));
+    window.set_cursor_visible(false);
     state.configure();
 
     let _ = event_loop.run(move |event, control_flow| match event {
+        Event::DeviceEvent { event, .. } => {
+            match event {
+                DeviceEvent::MouseMotion { delta } => {
+                    state.camera_controller.process_mouse(delta.0, delta.1);
+                }
+                _ => {}
+            }
+        },
         Event::WindowEvent {
             ref event,
             window_id,
@@ -168,7 +177,8 @@ pub async fn run() {
                     _ => {}
                 }
             }
-        }
+        },
+        
         _ => {}
     });
 }

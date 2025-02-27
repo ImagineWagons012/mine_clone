@@ -1,6 +1,6 @@
-use winit::{event::WindowEvent, window::Window};
+use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{camera, world::{self, Chunk}, Camera, CameraController, Texture, Vertex};
+use crate::{camera::{self, Projection}, world::{self, Chunk}, Camera, CameraController, Texture, Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -17,12 +17,13 @@ pub struct State<'a> {
     camera: Camera,
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
-    camera_controller: CameraController,
+    pub camera_controller: CameraController,
     depth_texture: Texture,
     vertex_buffer: wgpu::Buffer,
     world: Chunk,
     num_vertices: usize,
     pub time: crate::time::Time,
+    projection: Projection,
 
 }
 
@@ -269,18 +270,11 @@ impl<'a> State<'a> {
         });
         
 
-        let camera = Camera {
-            eye: (0., 1., 2.).into(),
-            target: (0., 1., 0.).into(),
-            up: cgmath::Vector3::unit_y(),
-            aspect: config.width as f32 / config.height as f32,
-            fovy: 50.0,
-            znear: 0.1,
-            zfar: 160.0,
-        };
-
+        let camera = Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
+        let camera_controller = camera::CameraController::new(4.0, 0.4);
+        let projection = Projection::new(size.width, size.height, cgmath::Deg(40.), 0.1, 100.0);
         let mut camera_uniform = camera::CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+        camera_uniform.update_view_proj(&camera, &projection);
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
@@ -296,8 +290,6 @@ impl<'a> State<'a> {
             }],
             label: Some("camera_bind_group"),
         });
-
-        let camera_controller = CameraController::new(5.0);
 
         let mesh = world.generate_meshes();
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
@@ -327,6 +319,7 @@ impl<'a> State<'a> {
             world,
             num_vertices,
             time,
+            projection
         }
     }
 
@@ -341,7 +334,7 @@ impl<'a> State<'a> {
             self.config.height = new_size.height;
             self.configure();
         }
-        self.camera.aspect = self.config.width as f32 / self.config.height as f32;
+        self.projection.resize(self.config.width, self.config.height);
         self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
     }
 
@@ -350,18 +343,29 @@ impl<'a> State<'a> {
     }
 
     pub fn input(&mut self, event: &WindowEvent) -> bool {
-        self.camera_controller.process_events(event)
+        match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                match event {
+                    KeyEvent { physical_key, state, .. } => {
+                        self.camera_controller.process_keyboard(*physical_key, *state)
+                    }
+                }
+            }
+            _ => false
+        }
     }
 
     pub fn update(&mut self) {
         self.time.set_update_start_time();
-        self.camera_controller.update_camera(&mut self.camera, &self.time);
-        self.camera_uniform.update_view_proj(&self.camera);
+
+        self.camera_controller.update_camera(&mut self.camera, self.time.delta_time());
+        self.camera_uniform.update_view_proj(&self.camera, &self.projection);
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+
         self.time.update_update_time();
     }
 
