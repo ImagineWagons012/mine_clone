@@ -24,7 +24,6 @@ pub struct State<'a> {
     num_vertices: usize,
     pub time: crate::time::Time,
     projection: Projection,
-
 }
 
 impl<'a> State<'a> {
@@ -33,7 +32,6 @@ impl<'a> State<'a> {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
-        // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
             ..Default::default()
@@ -64,9 +62,8 @@ impl<'a> State<'a> {
             .unwrap();
 
         let surface_caps = surface.get_capabilities(&adapter);
-        // Shader code in this tutorial assumes an sRGB surface texture. Using a different
-        // one will result in all the colors coming out darker. If you want to support non
-        // sRGB surfaces, you'll need to account for that when drawing to the frame.
+
+        // we assume an srgb surface
         let surface_format = surface_caps
             .formats
             .iter()
@@ -91,66 +88,29 @@ impl<'a> State<'a> {
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
 
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
+        let texture_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("texture bind group layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // This should match the filterable field of the
-                        // corresponding Texture entry above.
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // This should match the filterable field of the
-                        // corresponding Texture entry above.
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        // This should match the filterable field of the
-                        // corresponding Texture entry above.
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("texture_bind_group_layout"),
-            });
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    // This should match the filterable field of the
+                    // corresponding Texture entry above.
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });    
+        
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -226,49 +186,28 @@ impl<'a> State<'a> {
             cache: None,
         });
 
-        let grass_texture = Texture::from_bytes(
-            &device,
-            &queue,
-            include_bytes!("../assets/textures/grass_side.png"),
-            "grass_side",
-        )
-        .unwrap();
-        let grass_top_texture = Texture::from_bytes(&device, &queue, include_bytes!("../assets/textures/grass_top.png"), "grass top").unwrap();
-    
         let depth_texture = Texture::create_depth_texture(&device, &config, "depth_texture");
-        let dirt_texture = Texture::from_bytes(&device, &queue, include_bytes!("../assets/textures/dirt.png"), "dirt texture").unwrap();
 
-        let grass_block_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
+        let mut texture_bytes: Vec<&[u8]> = vec![];
+        texture_bytes.push(include_bytes!("../assets/textures/grass_top.png"));
+        texture_bytes.push(include_bytes!("../assets/textures/grass_side.png"));
+        texture_bytes.push(include_bytes!("../assets/textures/dirt.png"));
+
+        let texture_3d = Texture::from_3d_bytes(&device, &queue, texture_bytes, Some("grass_stuff"));
+        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { 
+            label: Some("texture bind group"),
+            layout: &texture_bind_group_layout, 
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&grass_texture.view),
+                    resource: wgpu::BindingResource::TextureView(&texture_3d.view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&grass_texture.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&grass_top_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&grass_top_texture.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&dirt_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::Sampler(&dirt_texture.sampler),
+                    resource: wgpu::BindingResource::Sampler(&texture_3d.sampler),
                 },
             ],
-            label: Some("grass_side_bind_group"),
         });
-        
 
         let camera = Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
         let camera_controller = camera::CameraController::new(4.0, 0.4);
@@ -309,7 +248,7 @@ impl<'a> State<'a> {
             config,
             size,
             render_pipeline,
-            bind_groups: [grass_block_bind_group, camera_bind_group],
+            bind_groups: [texture_bind_group, camera_bind_group],
             camera,
             camera_buffer,
             camera_uniform,

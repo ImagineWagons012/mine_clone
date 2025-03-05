@@ -46,33 +46,34 @@ fn vs_main(
 
 // grass side
 @group(0) @binding(0)
-var side_t_diffuse: texture_2d<f32>;
+var side_t_diffuse: texture_3d<f32>;
 @group(0) @binding(1)
 var side_s_diffuse: sampler;
 
 
-// grass top
-@group(0) @binding(2)
-var top_t_diffuse: texture_2d<f32>;
-@group(0) @binding(3)
-var top_s_diffuse: sampler;
+// // grass top
+// @group(0) @binding(2)
+// var top_t_diffuse: texture_2d<f32>;
+// @group(0) @binding(3)
+// var top_s_diffuse: sampler;
 
-// dirt
-@group(0) @binding(4)
-var dirt_t_diffuse: texture_2d<f32>;
-@group(0) @binding(5)
-var dirt_s_diffuse: sampler;
+// // dirt
+// @group(0) @binding(4)
+// var dirt_t_diffuse: texture_2d<f32>;
+// @group(0) @binding(5)
+// var dirt_s_diffuse: sampler;
 
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    if in.tex_coord.z == 0.0 {
-        return textureSample(side_t_diffuse, side_s_diffuse, in.tex_coord.xy);
-    }
-    else if in.tex_coord.z == 1.0{
-        return textureSample(top_t_diffuse, top_s_diffuse, in.tex_coord.xy) * vec4(0.5, 1.0, 0.15, 1.0);
-    }
-    else {
-        return textureSample(dirt_t_diffuse, dirt_s_diffuse, in.tex_coord.xy);
-    }
+    // if in.tex_coord.z == 0.0 {
+    //     return textureSample(side_t_diffuse, side_s_diffuse, in.tex_coord.xy);
+    // }
+    // else if in.tex_coord.z == 1.0{
+    //     return textureSample(top_t_diffuse, top_s_diffuse, in.tex_coord.xy) * vec4(0.5, 1.0, 0.15, 1.0);
+    // }
+    // else {
+    //     return textureSample(dirt_t_diffuse, dirt_s_diffuse, in.tex_coord.xy);
+    // }
+    return textureSample(side_t_diffuse, side_s_diffuse, in.tex_coord);
 }
