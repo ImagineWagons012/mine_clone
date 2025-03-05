@@ -101,6 +101,51 @@ impl Chunk {
                         }
                         texture_id_cache.insert(current, textures);
                     }
+                    else {
+                        let textures = texture_id_cache.get(&current).unwrap();
+                        match top {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::Up).unwrap();
+                                vertices.append(&mut top_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match bottom {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::Down).unwrap();
+                                vertices.append(&mut bottom_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match north {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::North).unwrap();
+                                vertices.append(&mut north_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match south {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::South).unwrap();
+                                vertices.append(&mut south_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match east {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::East).unwrap();
+                                vertices.append(&mut east_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match west {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::West).unwrap();
+                                vertices.append(&mut west_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                    }
 
                 }
             }
