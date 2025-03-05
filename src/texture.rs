@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::fs;
+use std::io::Read;
+use std::path::PathBuf;
 use anyhow::*;
 use image::GenericImageView;
 
@@ -89,7 +93,7 @@ impl Texture {
         let size = wgpu::Extent3d {
             width: 16,
             height: 16,
-            depth_or_array_layers: 3,
+            depth_or_array_layers: bytes.len() as u32,
         };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label,
@@ -190,5 +194,71 @@ impl Texture {
             view,
             sampler,
         }
+    }
+}
+
+
+pub struct TextureManager {
+    depth_texture: Texture,
+    block_textures: Texture,
+    name_to_id: HashMap<String, f32>,
+}
+
+impl TextureManager {
+    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, queue: &wgpu::Queue) -> Self {
+        let (block_textures, name_to_id) = Self::load_textures("./assets/textures", device, queue, Some("block_textures"));
+        Self { 
+            depth_texture: Texture::create_depth_texture(device, config, "Depth Texture"), 
+            block_textures,
+            name_to_id 
+        }
+    }
+    pub fn depth_texture(&self) -> &Texture {
+        &self.depth_texture
+    }
+    pub fn depth_texture_mut(&mut self) -> &mut Texture {
+        &mut self.depth_texture
+    }
+
+    pub fn block_textures(&self) -> &Texture {
+        &self.block_textures
+    }
+
+    pub fn get_id(&self, name: String) -> f32 {
+        *self.name_to_id.get(&name).unwrap()
+    }
+
+    fn load_textures(path: &str, device: &wgpu::Device, queue: &wgpu::Queue, label: Option<&str>) -> (Texture, HashMap<String, f32>) {
+        let mut file_paths_names: Vec<(PathBuf, String)> = vec![];
+        for entry in fs::read_dir(path).unwrap() {
+            let entry = entry.unwrap();
+            
+            if let std::result::Result::Ok(file_type) = entry.file_type() {
+                if file_type.is_file() {
+                    let file_name = entry.file_name();
+                    let as_string = file_name.into_string().unwrap();
+                    let (name, extension) = as_string.split_once('.').unwrap();
+                    
+                    if extension == "png" {
+                        file_paths_names.push((entry.path(), name.to_string()));
+                    }
+                }
+            }
+            else {
+                log::error!("Could not find type for {:?}", entry.path())
+            }
+        }
+        let mut bytes:Vec<Vec<u8>> = vec![];
+        let mut name_to_id = HashMap::new();
+
+        for (i, (path, name)) in file_paths_names.iter().enumerate() {
+            let mut handle = fs::File::open(path).unwrap();
+            bytes.push(vec![]);
+            let _ = handle.read_to_end(bytes.last_mut().unwrap());
+            name_to_id.insert(name.clone(), i as f32 / file_paths_names.len() as f32 + 0.0001);
+        }
+
+        let bytes = bytes.iter().map(|x| x.as_slice()).collect();
+        (Texture::from_3d_bytes(device, queue, bytes, label), name_to_id)
     }
 }

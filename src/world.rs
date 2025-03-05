@@ -1,5 +1,9 @@
-use crate::{block::Block, Vertex};
+use std::collections::HashMap;
 
+use crate::{block::{get_block_texture_ids, Block}, texture::TextureManager, Vertex};
+use rand::Rng;
+
+#[derive(Debug)]
 pub struct Chunk {
     pub block_data: [[[Block; 16]; 16]; 256],
 }
@@ -7,26 +11,22 @@ pub struct Chunk {
 impl Chunk {
     pub fn new() -> Self {
         let mut block_data = [[[Block::Air; 16]; 16]; 256];
-
-        block_data[61][0][0] = Block::Grass;
-        block_data[61][0][1] = Block::Grass;
-        block_data[60][0][0] = Block::Grass;
-        block_data[60][0][1] = Block::Grass;
-        block_data[60][1][0] = Block::Grass;
-        block_data[60][1][1] = Block::Grass;
-        block_data[60][2][0] = Block::Grass;
-        block_data[60][2][1] = Block::Grass;
-        block_data[60][3][0] = Block::Grass;
-        block_data[60][3][1] = Block::Grass;
-
+        for plane in &mut block_data {
+            let mut rng = rand::rng();
+            plane[rng.random_range(0..16)][rng.random_range(0..16)] = Block::Grass;
+        }
         Self { block_data }
     }
-    pub fn generate_meshes(&self) -> Vec<Vertex> {
+    pub fn generate_mesh(&self, texture_manager: &TextureManager) -> Vec<Vertex> {
+        let start = std::time::Instant::now();
+
+        let mut texture_id_cache = HashMap::new();
         let mut vertices = vec![];
         for y in 0..self.block_data.len() {
             for x in 0..self.block_data[y].len() {
                 for z in 0..self.block_data[y][x].len() {
-                    if self.block_data[y][x][z] == Block::Air {
+                    let current = self.block_data[y][x][z];
+                    if current == Block::Air {
                         continue;
                     }
                     let mut top = Block::Air;
@@ -54,46 +54,65 @@ impl Chunk {
                         west = self.block_data[y][x][z + 1];
                     }
 
-                    match top {
-                        Block::Air => {
-                            vertices.append(&mut top_face(x as f32, y as f32, z as f32, 0.0).to_vec());
-                        },
-                        _ => {}
+                    if let None = texture_id_cache.get(&current) {
+                        let textures = get_block_texture_ids(current, texture_manager);
+    
+                        match top {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::Up).unwrap();
+                                vertices.append(&mut top_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match bottom {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::Down).unwrap();
+                                vertices.append(&mut bottom_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match north {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::North).unwrap();
+                                vertices.append(&mut north_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match south {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::South).unwrap();
+                                vertices.append(&mut south_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match east {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::East).unwrap();
+                                vertices.append(&mut east_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        match west {
+                            Block::Air => {
+                                let texture_id = textures.get(&crate::Cardinal::West).unwrap();
+                                vertices.append(&mut west_face(x as f32, y as f32, z as f32, *texture_id).to_vec());
+                            },
+                            _ => {}
+                        }
+                        texture_id_cache.insert(current, textures);
                     }
-                    match bottom {
-                        Block::Air => {
-                            vertices.append(&mut bottom_face(x as f32, y as f32, z as f32, 1.0).to_vec());
-                        },
-                        _ => {}
-                    }
-                    match north {
-                        Block::Air => {
-                            vertices.append(&mut north_face(x as f32, y as f32, z as f32, 0.5).to_vec());
-                        },
-                        _ => {}
-                    }
-                    match south {
-                        Block::Air => {
-                            vertices.append(&mut south_face(x as f32, y as f32, z as f32, 0.5).to_vec());
-                        },
-                        _ => {}
-                    }
-                    match east {
-                        Block::Air => {
-                            vertices.append(&mut east_face(x as f32, y as f32, z as f32, 0.5).to_vec());
-                        },
-                        _ => {}
-                    }
-                    match west {
-                        Block::Air => {
-                            vertices.append(&mut west_face(x as f32, y as f32, z as f32, 0.5).to_vec());
-                        },
-                        _ => {}
-                    }
+
                 }
             }
         }
+        println!("{:?}", start.elapsed().as_secs_f32());
         vertices
+    }
+}
+
+impl Default for Chunk {
+    fn default() -> Self {
+        Self { block_data: [[[Block::default(); 16]; 16]; 256] }
     }
 }
 
@@ -402,183 +421,4 @@ fn bottom_face(x: f32, y: f32, z: f32, texture_id: f32) -> [Vertex; 6] {
             tex_coord: [1.0, 0.0, texture_id],
         },
     ]
-}
-
-fn generate_mesh(vertices: &mut Vec<Vertex>, rows: f32, columns: f32, height: f32) {
-    let positions = vec![
-        // North bottom left (0)
-        [0.0, height, 0.0],
-        // North top right (1)
-        [rows, height + 1.0, 0.0],
-        // North bottom right(2)
-        [rows, height, 0.0],
-        // North top left (3)
-        [0.0, height + 1.0, 0.0],
-        // South top left (4)
-        [rows, height + 1.0, -columns],
-        // South top right (5)
-        [0.0, height + 1.0, -columns],
-        // South bottom left (6)
-        [rows, height, -columns],
-        // South bottom right (7)
-        [0.0, height, -columns],
-    ];
-
-    // // 2, 0, 7     2, 7, 6
-
-    // North face
-    vertices.push(Vertex {
-        position: positions[0],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[1],
-        tex_coord: [rows, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[3],
-        tex_coord: [0.0, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[0],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[2],
-        tex_coord: [rows, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[1],
-        tex_coord: [rows, 0.0, 0.0],
-    });
-
-    //South face
-    vertices.push(Vertex {
-        position: positions[6],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[7],
-        tex_coord: [rows, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[5],
-        tex_coord: [rows, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[6],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[5],
-        tex_coord: [rows, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[4],
-        tex_coord: [0.0, 0.0, 0.0],
-    });
-
-    // East face
-    vertices.push(Vertex {
-        position: positions[7],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[0],
-        tex_coord: [columns, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[3],
-        tex_coord: [columns, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[7],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[3],
-        tex_coord: [columns, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[5],
-        tex_coord: [0.0, 0.0, 0.0],
-    });
-
-    // West face
-    vertices.push(Vertex {
-        position: positions[2],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[6],
-        tex_coord: [columns, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[4],
-        tex_coord: [columns, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[2],
-        tex_coord: [0.0, 1.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[4],
-        tex_coord: [columns, 0.0, 0.0],
-    });
-    vertices.push(Vertex {
-        position: positions[1],
-        tex_coord: [0.0, 0.0, 0.0],
-    });
-
-    // Bottom face
-    vertices.push(Vertex {
-        position: positions[2],
-        tex_coord: [0.0, columns, -1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[0],
-        tex_coord: [rows, columns, -1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[7],
-        tex_coord: [rows, 0.0, -1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[2],
-        tex_coord: [0.0, columns, -1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[7],
-        tex_coord: [rows, 0.0, -1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[6],
-        tex_coord: [0.0, 0.0, -1.0],
-    });
-
-    // Top face
-    vertices.push(Vertex {
-        position: positions[3],
-        tex_coord: [0.0, columns, 1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[4],
-        tex_coord: [rows, 0.0, 1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[5],
-        tex_coord: [0.0, 0.0, 1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[3],
-        tex_coord: [0.0, columns, 1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[1],
-        tex_coord: [rows, columns, 1.0],
-    });
-    vertices.push(Vertex {
-        position: positions[4],
-        tex_coord: [rows, 0.0, 1.0],
-    });
 }

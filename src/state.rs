@@ -1,6 +1,6 @@
 use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{camera::{self, Projection}, world::{self, Chunk}, Camera, CameraController, Texture, Vertex};
+use crate::{camera::{self, Projection}, texture::TextureManager, world::{self, Chunk}, Camera, CameraController, Texture, Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -18,12 +18,12 @@ pub struct State<'a> {
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
     pub camera_controller: CameraController,
-    depth_texture: Texture,
     vertex_buffer: wgpu::Buffer,
     world: Chunk,
     num_vertices: usize,
     pub time: crate::time::Time,
     projection: Projection,
+    texture_manager: TextureManager,
 }
 
 impl<'a> State<'a> {
@@ -186,25 +186,23 @@ impl<'a> State<'a> {
             cache: None,
         });
 
-        let depth_texture = Texture::create_depth_texture(&device, &config, "depth_texture");
+        // let mut texture_bytes: Vec<&[u8]> = vec![];
+        // texture_bytes.push(include_bytes!("../assets/textures/grass_top.png"));
+        // texture_bytes.push(include_bytes!("../assets/textures/grass_side.png"));
+        // texture_bytes.push(include_bytes!("../assets/textures/dirt.png"));
 
-        let mut texture_bytes: Vec<&[u8]> = vec![];
-        texture_bytes.push(include_bytes!("../assets/textures/grass_top.png"));
-        texture_bytes.push(include_bytes!("../assets/textures/grass_side.png"));
-        texture_bytes.push(include_bytes!("../assets/textures/dirt.png"));
-
-        let texture_3d = Texture::from_3d_bytes(&device, &queue, texture_bytes, Some("grass_stuff"));
+        let texture_manager = TextureManager::new(&device, &config, &queue);
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { 
             label: Some("texture bind group"),
             layout: &texture_bind_group_layout, 
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_3d.view),
+                    resource: wgpu::BindingResource::TextureView(&texture_manager.block_textures().view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&texture_3d.sampler),
+                    resource: wgpu::BindingResource::Sampler(&texture_manager.block_textures().sampler),
                 },
             ],
         });
@@ -230,7 +228,7 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let mesh = world.generate_meshes();
+        let mesh = world.generate_mesh(&texture_manager);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
             label: Some("vertex_buffer"),
             contents: bytemuck::cast_slice(&mesh),
@@ -238,6 +236,8 @@ impl<'a> State<'a> {
         });
 
         let num_vertices = mesh.len();
+
+
         let time = crate::time::Time::new();
 
         Self {
@@ -253,12 +253,12 @@ impl<'a> State<'a> {
             camera_buffer,
             camera_uniform,
             camera_controller,
-            depth_texture,
             vertex_buffer,
             world,
             num_vertices,
             time,
-            projection
+            projection,
+            texture_manager
         }
     }
 
@@ -274,7 +274,7 @@ impl<'a> State<'a> {
             self.configure();
         }
         self.projection.resize(self.config.width, self.config.height);
-        self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+        *self.texture_manager.depth_texture_mut() = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
     }
 
     pub fn configure(&mut self) {
@@ -336,7 +336,7 @@ impl<'a> State<'a> {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment{
-                    view: &self.depth_texture.view,
+                    view: &self.texture_manager.depth_texture().view,
                     depth_ops: Some(wgpu::Operations{
                         load: wgpu::LoadOp::Clear(100.0),
                         store: wgpu::StoreOp::Store,

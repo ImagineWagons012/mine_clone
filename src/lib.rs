@@ -18,6 +18,15 @@ use state::State;
 use camera::{Camera, CameraController};
 use texture::Texture;
 
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub enum Cardinal {
+    North,
+    South,
+    East,
+    West,
+    Up,
+    Down,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -105,7 +114,7 @@ pub async fn run() {
     env_logger::builder()
     .target(env_logger::Target::Stdout)
     .format_timestamp(None)
-    .filter_level(log::LevelFilter::Info)
+    .filter_level(log::LevelFilter::Off)
     .init();
 
     let event_loop = EventLoop::new().unwrap();
