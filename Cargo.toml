@@ -13,6 +13,9 @@ bytemuck = { version = "1.16", features = [ "derive" ] }
 anyhow = "1.0"
 cgmath = "0.18"
 rand = "0.9.0"
+rand_chacha = "0.9.0"
+rand_seeder = "0.4.0"
+noise = "0.9.0"
 
 
 

@@ -1,6 +1,6 @@
 use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{camera::{self, Projection}, texture::TextureManager, world::{self, Chunk}, Camera, CameraController, Texture, Vertex};
+use crate::{camera::{self, Projection}, texture::TextureManager, world::{self, World}, Camera, CameraController, Texture, Vertex};
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -19,7 +19,7 @@ pub struct State<'a> {
     camera_buffer: wgpu::Buffer,
     pub camera_controller: CameraController,
     vertex_buffer: wgpu::Buffer,
-    world: Chunk,
+    world: World,
     num_vertices: usize,
     pub time: crate::time::Time,
     projection: Projection,
@@ -133,7 +133,12 @@ impl<'a> State<'a> {
                 push_constant_ranges: &[],
             });
 
-        let world = world::Chunk::new();
+        let mut world = world::World::new("seed".to_string());
+        for i in 0..20 {
+            for j in 0..20 {
+                world.generate_chunk(((i - 10) as f32, (j - 10) as f32));
+            }
+        }
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
@@ -186,11 +191,6 @@ impl<'a> State<'a> {
             cache: None,
         });
 
-        // let mut texture_bytes: Vec<&[u8]> = vec![];
-        // texture_bytes.push(include_bytes!("../assets/textures/grass_top.png"));
-        // texture_bytes.push(include_bytes!("../assets/textures/grass_side.png"));
-        // texture_bytes.push(include_bytes!("../assets/textures/dirt.png"));
-
         let texture_manager = TextureManager::new(&device, &config, &queue);
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { 
             label: Some("texture bind group"),
@@ -208,7 +208,7 @@ impl<'a> State<'a> {
         });
 
         let camera = Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
-        let camera_controller = camera::CameraController::new(4.0, 0.4);
+        let camera_controller = camera::CameraController::new(8.0, 0.8);
         let projection = Projection::new(size.width, size.height, cgmath::Deg(40.), 0.1, 100.0);
         let mut camera_uniform = camera::CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
@@ -228,7 +228,7 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let mesh = world.generate_mesh(&texture_manager);
+        let mesh = world.mesh(&texture_manager);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
             label: Some("vertex_buffer"),
             contents: bytemuck::cast_slice(&mesh),

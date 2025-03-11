@@ -18,15 +18,18 @@ use state::State;
 use camera::{Camera, CameraController};
 use texture::Texture;
 
+
+#[repr(u8)]
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub enum Cardinal {
+    Up = 0,
+    Down,
     North,
     South,
     East,
     West,
-    Up,
-    Down,
 }
+
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -154,6 +157,7 @@ pub async fn run() {
                         ..
                     } => control_flow.exit(),
                     WindowEvent::RedrawRequested => {
+                        println!("{}", state.time.delta_time());
                         state.time.set_frame_start_time();
                         // This tells winit that we want another frame after this one
                         state.window().request_redraw();

@@ -36,7 +36,7 @@ impl Time {
     pub fn cpu_time(&self) -> f32 {
         self.update_duration.as_secs_f32()
     }
-    // elapsed time since last update started in seconds (f32)
+    /// elapsed time between updates in seconds
     pub fn delta_time(&self) -> f32 {
         self.frame_time.as_secs_f32()
     }
