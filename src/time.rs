@@ -7,7 +7,7 @@ pub struct Time {
     render_start_time: Instant,
     render_duration: Duration,
     update_duration: Duration,
-    frame_time: Duration,
+    pub frame_time: Duration,
 }
 
 impl Time {

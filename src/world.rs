@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use crate::{
     block::{get_block_texture_ids, Block},
     texture::TextureManager,
-    Vertex,
+    Cardinal, Vertex,
 };
 use cgmath::{Vector2, Vector3};
-use rand::Rng;
 use noise::{NoiseFn, Perlin};
+use rand::Rng;
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -29,8 +29,42 @@ impl Chunk {
     pub fn mesh(&self) -> Option<&[Vertex]> {
         self.mesh.as_ref().map(|x| &**x)
     }
-
-    pub fn generate_mesh(&mut self, texture_manager: &TextureManager) -> &[Vertex] {
+    pub fn get_side_blocks(&self, side: Cardinal) -> Box<[[Block; 16]; 256]> {
+        let mut blocks = Box::new([[Block::Air; 16]; 256]);
+        match side {
+            Cardinal::North => {
+                for (i, plane) in self.block_data.iter().enumerate() {
+                    blocks[i] = plane[plane.len() - 1];
+                }
+            }
+            Cardinal::South => {
+                for (i, plane) in self.block_data.iter().enumerate() {
+                    blocks[i] = plane[0];
+                }
+            }
+            Cardinal::East => {
+                for (i, plane) in self.block_data.iter().enumerate() {
+                    for (j, row) in plane.iter().enumerate() {
+                        blocks[i][j] = row[row.len() - 1];
+                    }
+                }
+            }
+            Cardinal::West => {
+                for (i, plane) in self.block_data.iter().enumerate() {
+                    for (j, row) in plane.iter().enumerate() {
+                        blocks[i][j] = row[0];
+                    }
+                }
+            }
+            _ => {}
+        }
+        blocks
+    }
+    pub fn generate_mesh(
+        &mut self,
+        texture_manager: &TextureManager,
+        side_blocks: &[[[Block; 16]; 256]; 4],
+    ) -> &[Vertex] {
         // let start = std::time::Instant::now();
 
         let mut texture_id_cache = HashMap::new();
@@ -44,27 +78,43 @@ impl Chunk {
                     }
                     let mut top = Block::Air;
                     let mut bottom = Block::Air;
-                    let mut north = Block::Air;
-                    let mut south = Block::Air;
-                    let mut east = Block::Air;
-                    let mut west = Block::Air;
+                    let north;
+                    let south;
+                    let east;
+                    let west;
                     if y < 255 {
                         top = self.block_data[y + 1][x][z];
                     }
                     if y > 0 {
                         bottom = self.block_data[y - 1][x][z];
                     }
+
                     if x < 15 {
                         north = self.block_data[y][x + 1][z];
+                    } else {
+                        north = side_blocks[0][y][z];
+                        // println!("north {:?}", side_blocks[0][y][z]);
                     }
+
                     if x > 0 {
                         south = self.block_data[y][x - 1][z];
+                    } else {
+                        south = side_blocks[1][y][z];
+                        // println!("south {:?}", side_blocks[1][y][z]);
                     }
+
                     if z > 0 {
                         east = self.block_data[y][x][z - 1];
+                    } else {
+                        east = side_blocks[2][y][x];
+                        // println!("east {:?}", side_blocks[2][y][x]);
                     }
+
                     if z < 15 {
                         west = self.block_data[y][x][z + 1];
+                    } else {
+                        west = side_blocks[3][y][x];
+                        // println!("west {:?}", side_blocks[3][y][x]);
                     }
 
                     let position: Vector3<f32> = (
@@ -76,94 +126,50 @@ impl Chunk {
 
                     if let None = texture_id_cache.get(&current) {
                         let textures = get_block_texture_ids(current, texture_manager);
-
-                        match top {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::Up as usize];
-                                vertices.append(&mut top_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
-                        }
-                        match bottom {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::Down as usize];
-                                vertices.append(&mut bottom_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
-                        }
-                        match north {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::North as usize];
-                                vertices.append(&mut north_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
-                        }
-                        match south {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::South as usize];
-                                vertices.append(&mut south_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
-                        }
-                        match east {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::East as usize];
-                                vertices.append(&mut east_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
-                        }
-                        match west {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::West as usize];
-                                vertices.append(&mut west_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
-                        }
                         texture_id_cache.insert(current, textures);
-                    } else {
-                        let textures = texture_id_cache.get(&current).unwrap();
-                        match top {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::Up as usize];
-                                vertices.append(&mut top_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
+                    }
+                    let textures = texture_id_cache.get(&current).unwrap();
+                    match top {
+                        Block::Air => {
+                            let texture_id = textures[crate::Cardinal::Up as usize];
+                            vertices.append(&mut top_face(position, texture_id).to_vec());
                         }
-                        match bottom {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::Down as usize];
-                                vertices.append(&mut bottom_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
+                        _ => {}
+                    }
+                    match bottom {
+                        Block::Air => {
+                            let texture_id = textures[crate::Cardinal::Down as usize];
+                            vertices.append(&mut bottom_face(position, texture_id).to_vec());
                         }
-                        match north {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::North as usize];
-                                vertices.append(&mut north_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
+                        _ => {}
+                    }
+                    match north {
+                        Block::Air => {
+                            let texture_id = textures[crate::Cardinal::North as usize];
+                            vertices.append(&mut north_face(position, texture_id).to_vec());
                         }
-                        match south {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::South as usize];
-                                vertices.append(&mut south_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
+                        _ => {}
+                    }
+                    match south {
+                        Block::Air => {
+                            let texture_id = textures[crate::Cardinal::South as usize];
+                            vertices.append(&mut south_face(position, texture_id).to_vec());
                         }
-                        match east {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::East as usize];
-                                vertices.append(&mut east_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
+                        _ => {}
+                    }
+                    match east {
+                        Block::Air => {
+                            let texture_id = textures[crate::Cardinal::East as usize];
+                            vertices.append(&mut east_face(position, texture_id).to_vec());
                         }
-                        match west {
-                            Block::Air => {
-                                let texture_id = textures[crate::Cardinal::West as usize];
-                                vertices.append(&mut west_face(position, texture_id).to_vec());
-                            }
-                            _ => {}
+                        _ => {}
+                    }
+                    match west {
+                        Block::Air => {
+                            let texture_id = textures[crate::Cardinal::West as usize];
+                            vertices.append(&mut west_face(position, texture_id).to_vec());
                         }
+                        _ => {}
                     }
                 }
             }
@@ -185,7 +191,7 @@ impl Default for Chunk {
 }
 
 pub struct World {
-    chunks: Vec<Vec<Chunk>>,
+    chunks: Vec<Chunk>,
     seed: [u8; 32],
     seed_string: String,
 }
@@ -198,42 +204,78 @@ impl World {
         rng.fill(&mut seed);
 
         Self {
-            chunks: vec![vec![]],
+            chunks: vec![],
             seed,
             seed_string,
         }
     }
     pub fn mesh(&mut self, texture_manager: &TextureManager) -> Vec<Vertex> {
         let mut mesh = vec![];
-        for chunk_rows in &mut self.chunks {
-            for chunk in chunk_rows {
-                if let Some(chunk_mesh) = &chunk.mesh() {
-                    for vertex in *chunk_mesh {
+        for i in 0..self.chunks.len() {
+                let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
+                let position = self.chunks[i].position;
+                // North side
+                if let Some(chunk) = self.get_chunk(position + Vector2::unit_x()) {
+                    side_blocks[0] = *chunk.get_side_blocks(Cardinal::South);
+                }
+                // South side
+                if let Some(chunk) = self.get_chunk(position - Vector2::unit_x()) {
+                    side_blocks[1] = *chunk.get_side_blocks(Cardinal::North);
+                }
+                // East side
+                if let Some(chunk) = self.get_chunk(position + Vector2::unit_y()) {
+                    side_blocks[3] = *chunk.get_side_blocks(Cardinal::West);
+                }
+                // South side
+                if let Some(chunk) = self.get_chunk(position - Vector2::unit_y()) {
+                    side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
+                }
+
+                let chunk = &mut self.chunks[i];
+                if let Some(chunk_mesh) = chunk.mesh() {
+                    for vertex in chunk_mesh {
                         mesh.push(*vertex);
                     }
                 } else {
-                    let chunk_mesh = chunk.generate_mesh(texture_manager);
+                    let chunk_mesh = chunk.generate_mesh(texture_manager, &side_blocks);
                     for vertex in chunk_mesh {
                         mesh.push(*vertex);
                     }
                 }
-            }
         }
         mesh
     }
 
+    fn get_chunk(&self, position: Vector2<f32>) -> Option<&Chunk> {
+        self.chunks.iter().find(|x| x.position == position)
+    }
+
     pub fn generate_chunk(&mut self, at_position: (f32, f32)) {
-        let perlin = Perlin::new(1);
+        let perlin = Perlin::new(self.seed[0] as u32);
         let mut chunk = Chunk::new(at_position);
         for x in 0..16 {
             for z in 0..16 {
                 let y =
-                (
-                    1.0 * perlin.get([0.5 * (x as f32 / 16.0 + chunk.position.x) as f64, 0.5 * (z as f32 / 16.0 + chunk.position.y) as f64]) +
-                    3.33 * perlin.get([0.05 * (x as f32 / 16.0 + chunk.position.x) as f64, 0.05 * (z as f32 / 16.0 + chunk.position.y) as f64]) +
-                    20.0 * perlin.get([0.0005 * (x as f32 / 16.0 + chunk.position.x) as f64, 0.0005 * (z as f32 / 16.0 + chunk.position.y) as f64]) + 
-                    300.0 * perlin.get([0.0005 * (x as f32 / 16.0 + chunk.position.x) as f64, 0.0005 * (z as f32 / 16.0 + chunk.position.y) as f64])
-                ) * 3.0 + 60.0;
+                    (10.0 * perlin.get([
+                        0.5 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                        0.5 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                    ]) + 50.33
+                        * perlin.get([
+                            0.05 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                            0.05 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                        ])
+                        + 100.0
+                            * perlin.get([
+                                0.0005 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                                0.0005 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                            ])
+                        // + 700.0
+                        //     * perlin.get([
+                        //         0.0001 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                        //         0.0001 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                        //     ])
+                        )/3.0
+                        + 60.0;
                 // println!("{:?}", y);
                 let y = y as usize;
                 chunk.block_data[y][x][z] = Block::Grass;
@@ -241,15 +283,15 @@ impl World {
                     chunk.block_data[height][x][z] = Block::Dirt;
                     if y < 4 {
                         chunk.block_data[height][x][z] = Block::Stone;
-                    }
-                    else if height < y - 4 {
+                    } else if height < y - 4 {
                         chunk.block_data[height][x][z] = Block::Stone;
                     }
                 }
             }
         }
         chunk.block_data[0] = [[Block::Bedrock; 16]; 16];
-        self.chunks[0].push(chunk);
+
+        self.chunks.push(chunk);
     }
 }
 

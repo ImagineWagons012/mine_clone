@@ -157,7 +157,7 @@ pub async fn run() {
                         ..
                     } => control_flow.exit(),
                     WindowEvent::RedrawRequested => {
-                        println!("{}", state.time.delta_time());
+                        log::info!("fps: {}", 1.0/state.time.frame_time.as_secs_f32());
                         state.time.set_frame_start_time();
                         // This tells winit that we want another frame after this one
                         state.window().request_redraw();

@@ -134,9 +134,9 @@ impl<'a> State<'a> {
             });
 
         let mut world = world::World::new("seed".to_string());
-        for i in 0..20 {
-            for j in 0..20 {
-                world.generate_chunk(((i - 10) as f32, (j - 10) as f32));
+        for i in 0..50 {
+            for j in 0..50 {
+                world.generate_chunk(((i - 25) as f32, (j - 25) as f32));
             }
         }
 
@@ -207,7 +207,7 @@ impl<'a> State<'a> {
             ],
         });
 
-        let camera = Camera::new((0.0, 5.0, 10.0), cgmath::Deg(-90.0), cgmath::Deg(-20.0));
+        let camera = Camera::new((0.0, 5.0, 0.0), cgmath::Deg(90.0), cgmath::Deg(-20.0));
         let camera_controller = camera::CameraController::new(8.0, 0.8);
         let projection = Projection::new(size.width, size.height, cgmath::Deg(40.), 0.1, 100.0);
         let mut camera_uniform = camera::CameraUniform::new();
@@ -227,14 +227,14 @@ impl<'a> State<'a> {
             }],
             label: Some("camera_bind_group"),
         });
-
+        
         let mesh = world.mesh(&texture_manager);
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
             label: Some("vertex_buffer"),
             contents: bytemuck::cast_slice(&mesh),
             usage: wgpu::BufferUsages::VERTEX
         });
-
+        
         let num_vertices = mesh.len();
 
 
