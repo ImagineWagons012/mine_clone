@@ -209,7 +209,7 @@ impl World {
             seed_string,
         }
     }
-    pub fn mesh(&mut self, texture_manager: &TextureManager) -> Vec<Vertex> {
+    pub fn mesh(&mut self, texture_manager: &TextureManager) -> Vec<Vec<Vertex>> {
         let mut mesh = vec![];
         for i in 0..self.chunks.len() {
                 let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
@@ -233,14 +233,10 @@ impl World {
 
                 let chunk = &mut self.chunks[i];
                 if let Some(chunk_mesh) = chunk.mesh() {
-                    for vertex in chunk_mesh {
-                        mesh.push(*vertex);
-                    }
+                    mesh.push(chunk_mesh.to_vec());
                 } else {
                     let chunk_mesh = chunk.generate_mesh(texture_manager, &side_blocks);
-                    for vertex in chunk_mesh {
-                        mesh.push(*vertex);
-                    }
+                    mesh.push(chunk_mesh.to_vec());
                 }
         }
         mesh
@@ -256,10 +252,10 @@ impl World {
         for x in 0..16 {
             for z in 0..16 {
                 let y =
-                    (10.0 * perlin.get([
+                    20.0 * perlin.get([
                         0.5 * (x as f32 / 16.0 + chunk.position.x) as f64,
                         0.5 * (z as f32 / 16.0 + chunk.position.y) as f64,
-                    ]) + 50.33
+                    ]) + 80.0
                         * perlin.get([
                             0.05 * (x as f32 / 16.0 + chunk.position.x) as f64,
                             0.05 * (z as f32 / 16.0 + chunk.position.y) as f64,
@@ -268,16 +264,13 @@ impl World {
                             * perlin.get([
                                 0.0005 * (x as f32 / 16.0 + chunk.position.x) as f64,
                                 0.0005 * (z as f32 / 16.0 + chunk.position.y) as f64,
-                            ])
-                        // + 700.0
-                        //     * perlin.get([
-                        //         0.0001 * (x as f32 / 16.0 + chunk.position.x) as f64,
-                        //         0.0001 * (z as f32 / 16.0 + chunk.position.y) as f64,
-                        //     ])
-                        )/3.0
-                        + 60.0;
+                            ]);
+                            
                 // println!("{:?}", y);
-                let y = y as usize;
+                let y = y / (20.0 + 80.0 + 100.0);
+                let y = (y * 1.2).powf(2.0);
+                let y = (y * 190.0 + 60.0).clamp(0.0, 255.0);
+                let y = y.floor() as usize;
                 chunk.block_data[y][x][z] = Block::Grass;
                 for height in (0..y).rev() {
                     chunk.block_data[height][x][z] = Block::Dirt;

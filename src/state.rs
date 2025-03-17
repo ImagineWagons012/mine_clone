@@ -18,9 +18,9 @@ pub struct State<'a> {
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
     pub camera_controller: CameraController,
-    vertex_buffer: wgpu::Buffer,
+    vertex_buffers: Vec<wgpu::Buffer>,
     world: World,
-    num_vertices: usize,
+    num_vertices: Vec<usize>,
     pub time: crate::time::Time,
     projection: Projection,
     texture_manager: TextureManager,
@@ -134,9 +134,9 @@ impl<'a> State<'a> {
             });
 
         let mut world = world::World::new("seed".to_string());
-        for i in 0..50 {
-            for j in 0..50 {
-                world.generate_chunk(((i - 25) as f32, (j - 25) as f32));
+        for i in 0..10 {
+            for j in 0..10 {
+                world.generate_chunk(((i - 5) as f32, (j - 5) as f32));
             }
         }
 
@@ -229,13 +229,24 @@ impl<'a> State<'a> {
         });
         
         let mesh = world.mesh(&texture_manager);
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
-            label: Some("vertex_buffer"),
-            contents: bytemuck::cast_slice(&mesh),
-            usage: wgpu::BufferUsages::VERTEX
-        });
+        let mut vertex_buffers = vec![];
+
+        for mesh in &mesh {
+            vertex_buffers.push(device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+                    label: Some("vertex_buffer"),
+                    contents: bytemuck::cast_slice(&mesh),
+                    usage: wgpu::BufferUsages::VERTEX
+                }));
+        }
+
+        // device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+        //     label: Some("vertex_buffer"),
+        //     contents: bytemuck::cast_slice(&mesh),
+        //     usage: wgpu::BufferUsages::VERTEX
+        // })
         
-        let num_vertices = mesh.len();
+        let num_vertices: Vec<usize> = mesh.iter().map(|x| x.len()).collect();
+        println!("{}", texture_manager.get_id("grass_top".to_string()));
 
 
         let time = crate::time::Time::new();
@@ -253,7 +264,7 @@ impl<'a> State<'a> {
             camera_buffer,
             camera_uniform,
             camera_controller,
-            vertex_buffer,
+            vertex_buffers,
             world,
             num_vertices,
             time,
@@ -350,8 +361,10 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..self.num_vertices as u32, 0..1 as u32);
+            for (index, buffer) in self.vertex_buffers.iter().enumerate() {
+                render_pass.set_vertex_buffer(0, buffer.slice(..));
+                render_pass.draw(0..self.num_vertices[index] as u32, 0..1 as u32);
+            }
         }
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));

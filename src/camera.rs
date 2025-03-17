@@ -108,6 +108,7 @@ pub struct CameraController {
     scroll: f32,
     speed: f32,
     sensitivity: f32,
+    speed_boost: f32,
 }
 
 impl CameraController {
@@ -122,6 +123,7 @@ impl CameraController {
             rotate_horizontal: 0.0,
             rotate_vertical: 0.0,
             scroll: 0.0,
+            speed_boost: 1.0,
             speed,
             sensitivity,
         }
@@ -133,6 +135,7 @@ impl CameraController {
         } else {
             0.0
         };
+
         match key {
             PhysicalKey::Code(key_code) => {
                 match key_code {
@@ -160,6 +163,10 @@ impl CameraController {
                         self.amount_down = amount;
                         true
                     }
+                    KeyCode::ControlLeft => {
+                        self.speed_boost = amount * 2.0 + 1.0;
+                        true
+                    }
                     _ => false,
                 }
             }
@@ -185,8 +192,16 @@ impl CameraController {
         let (yaw_sin, yaw_cos) = camera.yaw.0.sin_cos();
         let forward = Vector3::new(yaw_cos, 0.0, yaw_sin).normalize();
         let right = Vector3::new(-yaw_sin, 0.0, yaw_cos).normalize();
-        camera.position += forward * (self.amount_forward - self.amount_backward) * self.speed * dt;
-        camera.position += right * (self.amount_right - self.amount_left) * self.speed * dt;
+        let speed = self.speed * self.speed_boost;
+        // camera.position += forward * (self.amount_forward - self.amount_backward) * speed * dt;
+        // camera.position += right * (self.amount_right - self.amount_left) * speed * dt;
+        let forward = forward * (self.amount_forward - self.amount_backward);
+        let right = right * (self.amount_right - self.amount_left);
+        let mut dir = forward + right;
+        if (self.amount_backward != 0.0 || self.amount_forward != 0.0) && (self.amount_left != 0.0 || self.amount_right != 0.0) {
+            dir = dir / 2_f32.sqrt();
+        } 
+        camera.position += dir * speed * dt;
 
         // Move in/out (aka. "zoom")
         // Note: this isn't an actual zoom. The camera's position
