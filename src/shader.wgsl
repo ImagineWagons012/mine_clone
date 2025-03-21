@@ -41,10 +41,11 @@ var side_s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    var sample = textureSample(side_t_diffuse, side_s_diffuse, in.tex_coord) + vec4(pow(in.distance/100.0, 4.0)); 
+    var sample = textureSample(side_t_diffuse, side_s_diffuse, in.tex_coord); 
     // grass top id
     if in.tex_coord.z == 0.44929785 {
         sample = sample * vec4<f32>(0.3, 1.0, 0.15, 1.0);
     }
+    // sample += vec4(1-pow(0.999, in.distance));
     return sample;
 }

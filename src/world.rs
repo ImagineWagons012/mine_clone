@@ -8,12 +8,12 @@ use crate::{
 use cgmath::{Vector2, Vector3};
 use noise::{NoiseFn, Perlin};
 use rand::Rng;
+use wgpu::util::DeviceExt;
 
 #[derive(Debug)]
 pub struct Chunk {
     block_data: [[[Block; 16]; 16]; 256],
     position: Vector2<f32>,
-    mesh: Option<Vec<Vertex>>,
 }
 
 impl Chunk {
@@ -22,13 +22,10 @@ impl Chunk {
         Self {
             block_data,
             position: position.into(),
-            mesh: None,
         }
     }
 
-    pub fn mesh(&self) -> Option<&[Vertex]> {
-        self.mesh.as_ref().map(|x| &**x)
-    }
+
     pub fn get_side_blocks(&self, side: Cardinal) -> Box<[[Block; 16]; 256]> {
         let mut blocks = Box::new([[Block::Air; 16]; 256]);
         match side {
@@ -64,7 +61,8 @@ impl Chunk {
         &mut self,
         texture_manager: &TextureManager,
         side_blocks: &[[[Block; 16]; 256]; 4],
-    ) -> &[Vertex] {
+        device: &wgpu::Device
+    ) -> (wgpu::Buffer, usize) {
         // let start = std::time::Instant::now();
 
         let mut texture_id_cache = HashMap::new();
@@ -174,9 +172,12 @@ impl Chunk {
                 }
             }
         }
-        // println!("{:?}", start.elapsed().as_secs_f32());
-        self.mesh = Some(vertices);
-        self.mesh.as_ref().unwrap()
+        
+        (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(format!("vertex_buffer, x: {}, z: {}", self.position.x, self.position.y).as_str()),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX
+        }), vertices.len())
     }
 }
 
@@ -185,7 +186,6 @@ impl Default for Chunk {
         Self {
             block_data: [[[Block::default(); 16]; 16]; 256],
             position: (0.0, 0.0).into(),
-            mesh: None,
         }
     }
 }
@@ -194,6 +194,9 @@ pub struct World {
     chunks: Vec<Chunk>,
     seed: [u8; 32],
     seed_string: String,
+    pub current_base_chunk: Vector2<f32>,
+    pub buffers: Vec<(wgpu::Buffer, usize)>,
+    render_distance: u32
 }
 
 impl World {
@@ -202,18 +205,36 @@ impl World {
         let mut rng = rand_seeder::SipHasher::from(seed).into_rng();
         let mut seed = [0; 32];
         rng.fill(&mut seed);
+        let render_distance = 20;
 
         Self {
             chunks: vec![],
             seed,
             seed_string,
+            current_base_chunk: (0.0, 0.0).into(),
+            buffers: vec![],
+            render_distance
         }
     }
-    pub fn mesh(&mut self, texture_manager: &TextureManager) -> Vec<Vec<Vertex>> {
-        let mut mesh = vec![];
-        for i in 0..self.chunks.len() {
+    pub fn generate_mesh(&mut self, texture_manager: &TextureManager, device: &wgpu::Device) {
+        for (buffer, _) in &self.buffers {
+            buffer.destroy();
+        }
+        self.buffers.clear();
+        let base_x = self.current_base_chunk.x;
+        let base_z = self.current_base_chunk.y;
+        for i in (base_x as i32 - self.render_distance as i32)..(base_x as i32 + self.render_distance as i32) {
+            for j in (base_z as i32 - self.render_distance as i32)..(base_z as i32 + self.render_distance as i32) {
+                let position = Vector2::new(j as f32, i as f32);
+                if let None = self.get_chunk(position) {
+                    self.generate_chunk(position);
+                }
+            }
+        }
+        for i in (base_x as i32 - self.render_distance as i32)..(base_x as i32 + self.render_distance as i32) {
+            for j in (base_z as i32 - self.render_distance as i32)..(base_z as i32 + self.render_distance as i32) {
+                let position = Vector2::new(j as f32, i as f32);
                 let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
-                let position = self.chunks[i].position;
                 // North side
                 if let Some(chunk) = self.get_chunk(position + Vector2::unit_x()) {
                     side_blocks[0] = *chunk.get_side_blocks(Cardinal::South);
@@ -230,44 +251,48 @@ impl World {
                 if let Some(chunk) = self.get_chunk(position - Vector2::unit_y()) {
                     side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
                 }
+                let buffer_num = self.get_chunk_mut(position).unwrap().generate_mesh(texture_manager, &side_blocks, device);
+                self.buffers.push(buffer_num);
 
-                let chunk = &mut self.chunks[i];
-                if let Some(chunk_mesh) = chunk.mesh() {
-                    mesh.push(chunk_mesh.to_vec());
-                } else {
-                    let chunk_mesh = chunk.generate_mesh(texture_manager, &side_blocks);
-                    mesh.push(chunk_mesh.to_vec());
-                }
+           }
         }
-        mesh
     }
 
     fn get_chunk(&self, position: Vector2<f32>) -> Option<&Chunk> {
         self.chunks.iter().find(|x| x.position == position)
     }
-
-    pub fn generate_chunk(&mut self, at_position: (f32, f32)) {
+    fn get_chunk_mut(&mut self, position: Vector2<f32>) -> Option<&mut Chunk> {
+        self.chunks.iter_mut().find(|x| x.position == position)
+    }
+    
+    pub fn generate_chunk(&mut self, at_position: Vector2<f32>) {
         let perlin = Perlin::new(self.seed[0] as u32);
         let mut chunk = Chunk::new(at_position);
         for x in 0..16 {
             for z in 0..16 {
                 let y =
-                    20.0 * perlin.get([
-                        0.5 * (x as f32 / 16.0 + chunk.position.x) as f64,
-                        0.5 * (z as f32 / 16.0 + chunk.position.y) as f64,
-                    ]) + 80.0
+                    25.0 * perlin.get([
+                        5.0e-1 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                        5.0e-1 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                    ]) 
+                    + 50.0
                         * perlin.get([
-                            0.05 * (x as f32 / 16.0 + chunk.position.x) as f64,
-                            0.05 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                            5.0e-2 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                            5.0e-2 * (z as f32 / 16.0 + chunk.position.y) as f64,
                         ])
-                        + 100.0
-                            * perlin.get([
-                                0.0005 * (x as f32 / 16.0 + chunk.position.x) as f64,
-                                0.0005 * (z as f32 / 16.0 + chunk.position.y) as f64,
-                            ]);
+                    + 75.0
+                        * perlin.get([
+                            5.0e-3 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                            5.0e-3 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                        ])
+                    + 100.0
+                        * perlin.get([
+                            5.0e-4 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                            5.0e-4 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                        ]);
                             
                 // println!("{:?}", y);
-                let y = y / (20.0 + 80.0 + 100.0);
+                let y = y / (25.0 + 50.0 + 75.0 + 100.0);
                 let y = (y * 1.2).powf(2.0);
                 let y = (y * 190.0 + 60.0).clamp(0.0, 255.0);
                 let y = y.floor() as usize;

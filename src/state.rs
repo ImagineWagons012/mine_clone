@@ -18,9 +18,7 @@ pub struct State<'a> {
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
     pub camera_controller: CameraController,
-    vertex_buffers: Vec<wgpu::Buffer>,
     world: World,
-    num_vertices: Vec<usize>,
     pub time: crate::time::Time,
     projection: Projection,
     texture_manager: TextureManager,
@@ -133,12 +131,7 @@ impl<'a> State<'a> {
                 push_constant_ranges: &[],
             });
 
-        let mut world = world::World::new("seed".to_string());
-        for i in 0..10 {
-            for j in 0..10 {
-                world.generate_chunk(((i - 5) as f32, (j - 5) as f32));
-            }
-        }
+        
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
@@ -207,7 +200,7 @@ impl<'a> State<'a> {
             ],
         });
 
-        let camera = Camera::new((0.0, 5.0, 0.0), cgmath::Deg(90.0), cgmath::Deg(-20.0));
+        let camera = Camera::new((0.0, 5.0, 1.0), cgmath::Deg(90.0), cgmath::Deg(-20.0));
         let camera_controller = camera::CameraController::new(8.0, 0.8);
         let projection = Projection::new(size.width, size.height, cgmath::Deg(40.), 0.1, 100.0);
         let mut camera_uniform = camera::CameraUniform::new();
@@ -227,29 +220,15 @@ impl<'a> State<'a> {
             }],
             label: Some("camera_bind_group"),
         });
+
+        let mut world = world::World::new("69420".to_string());
+        let pos = camera.position;
+        world.current_base_chunk = ((pos.x /16.0).floor(), (pos.z / 16.0).floor()).into();
         
-        let mesh = world.mesh(&texture_manager);
-        let mut vertex_buffers = vec![];
-
-        for mesh in &mesh {
-            vertex_buffers.push(device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
-                    label: Some("vertex_buffer"),
-                    contents: bytemuck::cast_slice(&mesh),
-                    usage: wgpu::BufferUsages::VERTEX
-                }));
-        }
-
-        // device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
-        //     label: Some("vertex_buffer"),
-        //     contents: bytemuck::cast_slice(&mesh),
-        //     usage: wgpu::BufferUsages::VERTEX
-        // })
-        
-        let num_vertices: Vec<usize> = mesh.iter().map(|x| x.len()).collect();
-        println!("{}", texture_manager.get_id("grass_top".to_string()));
-
+        world.generate_mesh(&texture_manager, &device);
 
         let time = crate::time::Time::new();
+
 
         Self {
             window,
@@ -264,12 +243,10 @@ impl<'a> State<'a> {
             camera_buffer,
             camera_uniform,
             camera_controller,
-            vertex_buffers,
             world,
-            num_vertices,
             time,
             projection,
-            texture_manager
+            texture_manager,
         }
     }
 
@@ -316,6 +293,8 @@ impl<'a> State<'a> {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
+        self.update_mesh();
+
         self.time.update_update_time();
     }
 
@@ -361,9 +340,9 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            for (index, buffer) in self.vertex_buffers.iter().enumerate() {
+            for (buffer, num) in self.world.buffers.iter() {
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
-                render_pass.draw(0..self.num_vertices[index] as u32, 0..1 as u32);
+                render_pass.draw(0..*num as u32, 0..1 as u32);
             }
         }
         // submit will accept anything that implements IntoIter
@@ -372,5 +351,13 @@ impl<'a> State<'a> {
 
         self.time.update_render_time();
         Ok(())
+    }
+
+    fn update_mesh(&mut self) {
+        let (camera_x, camera_z) = ((self.camera.position.x / 16.0).floor(), (self.camera.position.z / 16.0).floor());
+        if self.world.current_base_chunk != (camera_x, camera_z).into() {
+            self.world.current_base_chunk = (camera_x, camera_z).into();
+            self.world.generate_mesh(&self.texture_manager, &self.device);
+        }
     }
 }
