@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use crate::{
     block::{get_block_texture_ids, Block},
@@ -14,6 +14,7 @@ use wgpu::util::DeviceExt;
 pub struct Chunk {
     block_data: [[[Block; 16]; 16]; 256],
     position: Vector2<f32>,
+    buffer: Option<(Rc<wgpu::Buffer>, usize)>,
 }
 
 impl Chunk {
@@ -22,6 +23,7 @@ impl Chunk {
         Self {
             block_data,
             position: position.into(),
+            buffer: None
         }
     }
 
@@ -62,7 +64,7 @@ impl Chunk {
         texture_manager: &TextureManager,
         side_blocks: &[[[Block; 16]; 256]; 4],
         device: &wgpu::Device
-    ) -> (wgpu::Buffer, usize) {
+    ) -> (Rc<wgpu::Buffer>, usize) {
         // let start = std::time::Instant::now();
 
         let mut texture_id_cache = HashMap::new();
@@ -172,12 +174,23 @@ impl Chunk {
                 }
             }
         }
-        
-        (device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        self.buffer = Some((Rc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(format!("vertex_buffer, x: {}, z: {}", self.position.x, self.position.y).as_str()),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX
-        }), vertices.len())
+        })), vertices.len()));
+        self.buffer.as_ref().unwrap().clone()
+        
+    }
+    pub fn get_or_generate_mesh(&mut self, texture_manager: &TextureManager, side_blocks: &[[[Block; 16]; 256]; 4], device: &wgpu::Device) -> (Rc<wgpu::Buffer>, usize) {
+        match self.buffer.as_ref() {
+            Some((buffer, len)) => {
+                (buffer.clone(), *len)
+            }
+            None => {
+                self.generate_mesh(texture_manager, side_blocks, device)
+            }
+        }
     }
 }
 
@@ -186,6 +199,7 @@ impl Default for Chunk {
         Self {
             block_data: [[[Block::default(); 16]; 16]; 256],
             position: (0.0, 0.0).into(),
+            buffer: None
         }
     }
 }
@@ -195,17 +209,16 @@ pub struct World {
     seed: [u8; 32],
     seed_string: String,
     pub current_base_chunk: Vector2<f32>,
-    pub buffers: Vec<(wgpu::Buffer, usize)>,
+    pub buffers: Vec<(Rc<wgpu::Buffer>, usize)>,
     render_distance: u32
 }
 
 impl World {
-    pub fn new(seed: String) -> Self {
+    pub fn new(seed: String, render_distance: u32) -> Self {
         let seed_string = seed.clone();
         let mut rng = rand_seeder::SipHasher::from(seed).into_rng();
         let mut seed = [0; 32];
         rng.fill(&mut seed);
-        let render_distance = 20;
 
         Self {
             chunks: vec![],
@@ -217,9 +230,9 @@ impl World {
         }
     }
     pub fn generate_mesh(&mut self, texture_manager: &TextureManager, device: &wgpu::Device) {
-        for (buffer, _) in &self.buffers {
-            buffer.destroy();
-        }
+        // for (buffer, _) in &self.buffers {
+        //     buffer.destroy();
+        // }
         self.buffers.clear();
         let base_x = self.current_base_chunk.x;
         let base_z = self.current_base_chunk.y;
@@ -231,10 +244,10 @@ impl World {
                 }
             }
         }
+        let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
         for i in (base_x as i32 - self.render_distance as i32)..(base_x as i32 + self.render_distance as i32) {
             for j in (base_z as i32 - self.render_distance as i32)..(base_z as i32 + self.render_distance as i32) {
                 let position = Vector2::new(j as f32, i as f32);
-                let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
                 // North side
                 if let Some(chunk) = self.get_chunk(position + Vector2::unit_x()) {
                     side_blocks[0] = *chunk.get_side_blocks(Cardinal::South);
@@ -251,7 +264,7 @@ impl World {
                 if let Some(chunk) = self.get_chunk(position - Vector2::unit_y()) {
                     side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
                 }
-                let buffer_num = self.get_chunk_mut(position).unwrap().generate_mesh(texture_manager, &side_blocks, device);
+                let buffer_num = self.get_chunk_mut(position).unwrap().get_or_generate_mesh(texture_manager, &side_blocks, device);
                 self.buffers.push(buffer_num);
 
            }
@@ -292,9 +305,9 @@ impl World {
                         ]);
                             
                 // println!("{:?}", y);
-                let y = y / (25.0 + 50.0 + 75.0 + 100.0);
-                let y = (y * 1.2).powf(2.0);
-                let y = (y * 190.0 + 60.0).clamp(0.0, 255.0);
+                let y = (y / (25.0 + 50.0 + 75.0 + 100.0) + 1.0) / 2.0;
+                let y = (y).powf(2.5);
+                let y = (y * 190.0 + 20.0).clamp(0.0, 255.0);
                 let y = y.floor() as usize;
                 chunk.block_data[y][x][z] = Block::Grass;
                 for height in (0..y).rev() {

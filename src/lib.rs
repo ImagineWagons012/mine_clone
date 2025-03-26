@@ -116,7 +116,7 @@ pub async fn run() {
     env_logger::builder()
     .target(env_logger::Target::Stdout)
     .format_timestamp(None)
-    .filter_level(log::LevelFilter::Off)
+    .filter_level(log::LevelFilter::Info)
     .init();
 
     let event_loop = EventLoop::new().unwrap();
@@ -156,7 +156,6 @@ pub async fn run() {
                         ..
                     } => control_flow.exit(),
                     WindowEvent::RedrawRequested => {
-                        log::info!("fps: {}", 1.0/state.time.frame_time.as_secs_f32());
                         state.time.set_frame_start_time();
                         // This tells winit that we want another frame after this one
                         state.window().request_redraw();

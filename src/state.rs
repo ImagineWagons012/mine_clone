@@ -221,7 +221,7 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let mut world = world::World::new("69420".to_string());
+        let mut world = world::World::new("seed".to_string(), 10);
         let pos = camera.position;
         world.current_base_chunk = ((pos.x /16.0).floor(), (pos.z / 16.0).floor()).into();
         
