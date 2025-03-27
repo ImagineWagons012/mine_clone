@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
 
 use crate::{
     block::{get_block_texture_ids, Block},
@@ -14,7 +14,7 @@ use wgpu::util::DeviceExt;
 pub struct Chunk {
     block_data: [[[Block; 16]; 16]; 256],
     position: Vector2<f32>,
-    buffer: Option<(Rc<wgpu::Buffer>, usize)>,
+    buffer: Option<(Arc<wgpu::Buffer>, usize)>,
 }
 
 impl Chunk {
@@ -64,7 +64,7 @@ impl Chunk {
         texture_manager: &TextureManager,
         side_blocks: &[[[Block; 16]; 256]; 4],
         device: &wgpu::Device
-    ) -> (Rc<wgpu::Buffer>, usize) {
+    ) -> (Arc<wgpu::Buffer>, usize) {
         // let start = std::time::Instant::now();
 
         let mut texture_id_cache = HashMap::new();
@@ -174,15 +174,15 @@ impl Chunk {
                 }
             }
         }
-        self.buffer = Some((Rc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        self.buffer = Some((Arc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(format!("vertex_buffer, x: {}, z: {}", self.position.x, self.position.y).as_str()),
             contents: bytemuck::cast_slice(&vertices),
             usage: wgpu::BufferUsages::VERTEX
-        })), vertices.len()));
+        })), vertices.len())); 
         self.buffer.as_ref().unwrap().clone()
         
     }
-    pub fn get_or_generate_mesh(&mut self, texture_manager: &TextureManager, side_blocks: &[[[Block; 16]; 256]; 4], device: &wgpu::Device) -> (Rc<wgpu::Buffer>, usize) {
+    pub fn get_or_generate_mesh(&mut self, texture_manager: &TextureManager, side_blocks: &[[[Block; 16]; 256]; 4], device: &wgpu::Device) -> (Arc<wgpu::Buffer>, usize) {
         match self.buffer.as_ref() {
             Some((buffer, len)) => {
                 (buffer.clone(), *len)
@@ -205,12 +205,12 @@ impl Default for Chunk {
 }
 
 pub struct World {
-    chunks: Vec<Chunk>,
+    pub chunks: HashMap<(i64, i64), Chunk>,
     seed: [u8; 32],
     seed_string: String,
     pub current_base_chunk: Vector2<f32>,
-    pub buffers: Vec<(Rc<wgpu::Buffer>, usize)>,
-    render_distance: u32
+    pub buffers: Vec<(Arc<wgpu::Buffer>, usize)>,
+    pub render_distance: u32
 }
 
 impl World {
@@ -221,7 +221,7 @@ impl World {
         rng.fill(&mut seed);
 
         Self {
-            chunks: vec![],
+            chunks: HashMap::new(),
             seed,
             seed_string,
             current_base_chunk: (0.0, 0.0).into(),
@@ -229,53 +229,82 @@ impl World {
             render_distance
         }
     }
-    pub fn generate_mesh(&mut self, texture_manager: &TextureManager, device: &wgpu::Device) {
+    pub async fn generate_mesh(
+        texture_manager: Arc<Mutex<TextureManager>>, 
+        device: Arc<wgpu::Device>, 
+        world: Arc<Mutex<World>>
+    ) -> Vec<(Arc<wgpu::Buffer>, usize)> {
         // for (buffer, _) in &self.buffers {
         //     buffer.destroy();
         // }
-        self.buffers.clear();
-        let base_x = self.current_base_chunk.x;
-        let base_z = self.current_base_chunk.y;
-        for i in (base_x as i32 - self.render_distance as i32)..(base_x as i32 + self.render_distance as i32) {
-            for j in (base_z as i32 - self.render_distance as i32)..(base_z as i32 + self.render_distance as i32) {
-                let position = Vector2::new(j as f32, i as f32);
-                if let None = self.get_chunk(position) {
-                    self.generate_chunk(position);
-                }
-            }
-        }
+        let mut world_lock = world.lock().unwrap();
+        let base_x = world_lock.current_base_chunk.x;
+        let base_z = world_lock.current_base_chunk.y;
+        let mut buffers = vec![];
+        
         let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
-        for i in (base_x as i32 - self.render_distance as i32)..(base_x as i32 + self.render_distance as i32) {
-            for j in (base_z as i32 - self.render_distance as i32)..(base_z as i32 + self.render_distance as i32) {
+        for i in (base_x as i32 - world_lock.render_distance as i32)..(base_x as i32 + world_lock.render_distance as i32) {
+            for j in (base_z as i32 - world_lock.render_distance as i32)..(base_z as i32 + world_lock.render_distance as i32) {
+                if (i as f32 - base_x).powf(2.0) + (j as f32 - base_z).powf(2.0) > (world_lock.render_distance as f32).powf(2.0) {
+                    continue;
+                }
                 let position = Vector2::new(j as f32, i as f32);
                 // North side
-                if let Some(chunk) = self.get_chunk(position + Vector2::unit_x()) {
-                    side_blocks[0] = *chunk.get_side_blocks(Cardinal::South);
-                }
+                let position = position + Vector2::unit_x();
+                let chunk = world_lock.get_chunk(position);
+                side_blocks[0] = *chunk.get_side_blocks(Cardinal::South);
+                
                 // South side
-                if let Some(chunk) = self.get_chunk(position - Vector2::unit_x()) {
-                    side_blocks[1] = *chunk.get_side_blocks(Cardinal::North);
-                }
+                let position = position - Vector2::unit_x();
+                let chunk = world_lock.get_chunk(position);
+                side_blocks[1] = *chunk.get_side_blocks(Cardinal::North);
+                
                 // East side
-                if let Some(chunk) = self.get_chunk(position + Vector2::unit_y()) {
-                    side_blocks[3] = *chunk.get_side_blocks(Cardinal::West);
-                }
+                let position = position + Vector2::unit_y();
+                let chunk = world_lock.get_chunk(position);
+                side_blocks[3] = *chunk.get_side_blocks(Cardinal::West);
+                
                 // South side
-                if let Some(chunk) = self.get_chunk(position - Vector2::unit_y()) {
-                    side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
-                }
-                let buffer_num = self.get_chunk_mut(position).unwrap().get_or_generate_mesh(texture_manager, &side_blocks, device);
-                self.buffers.push(buffer_num);
+                let position = position - Vector2::unit_y();
+                let chunk = world_lock.get_chunk(position);
+                side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
 
+                let buffer_num = world_lock.get_chunk_mut(position).get_or_generate_mesh(&texture_manager.lock().unwrap(), &side_blocks, &device);
+                buffers.push(buffer_num);
            }
         }
+        return buffers;
     }
 
-    fn get_chunk(&self, position: Vector2<f32>) -> Option<&Chunk> {
-        self.chunks.iter().find(|x| x.position == position)
+    fn get_chunk(&mut self, position: Vector2<f32>) -> &Chunk {
+        let i_position = (position.x as i64, position.y as i64);
+        if self.is_chunk_available(&i_position) {
+            return self.chunks.get(&i_position).unwrap();
+        }
+        else {
+            self.generate_chunk(position);
+            return self.chunks.get(&i_position).unwrap();
+        }
     }
-    fn get_chunk_mut(&mut self, position: Vector2<f32>) -> Option<&mut Chunk> {
-        self.chunks.iter_mut().find(|x| x.position == position)
+    fn is_chunk_available(&self, position: &(i64, i64)) -> bool {
+        match self.chunks.get(position) {
+            Some(_) => {
+                true
+            }
+            None => {
+                false
+            }
+        }
+    }
+    fn get_chunk_mut(&mut self, position: Vector2<f32>) -> &mut Chunk {
+        let i_position = (position.x as i64, position.y as i64);
+        if self.is_chunk_available(&i_position) {
+            return self.chunks.get_mut(&i_position).unwrap();
+        }
+        else {
+            self.generate_chunk(position);
+            return self.chunks.get_mut(&i_position).unwrap();
+        }
     }
     
     pub fn generate_chunk(&mut self, at_position: Vector2<f32>) {
@@ -321,8 +350,8 @@ impl World {
             }
         }
         chunk.block_data[0] = [[Block::Bedrock; 16]; 16];
-
-        self.chunks.push(chunk);
+        let position = (at_position.x as i64, at_position.y as i64);
+        self.chunks.insert(position,chunk);
     }
 }
 

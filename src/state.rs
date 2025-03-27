@@ -1,10 +1,14 @@
+use std::sync::{Arc, Mutex};
+
+use cgmath::Vector2;
 use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{camera::{self, Projection}, texture::TextureManager, world::{self, World}, Camera, CameraController, Texture, Vertex};
+use crate::{camera::{self, Projection, Camera, CameraController}, texture::{TextureManager, Texture}, world::{self, World}, Vertex};
+use tokio::task::spawn;
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
-    device: wgpu::Device,
+    device: Arc<wgpu::Device>,
     queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
     pub size: winit::dpi::PhysicalSize<u32>,
@@ -18,10 +22,11 @@ pub struct State<'a> {
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
     pub camera_controller: CameraController,
-    world: World,
+    world: Arc<Mutex<World>>,
     pub time: crate::time::Time,
     projection: Projection,
-    texture_manager: TextureManager,
+    texture_manager: Arc<Mutex<TextureManager>>,
+    buffers: Vec<(Arc<wgpu::Buffer>, usize)>
 }
 
 impl<'a> State<'a> {
@@ -58,9 +63,9 @@ impl<'a> State<'a> {
             )
             .await
             .unwrap();
-
+        let device = Arc::new(device);
         let surface_caps = surface.get_capabilities(&adapter);
-
+        
         // we assume an srgb surface
         let surface_format = surface_caps
             .formats
@@ -183,7 +188,8 @@ impl<'a> State<'a> {
             multiview: None,
             cache: None,
         });
-
+        
+        
         let texture_manager = TextureManager::new(&device, &config, &queue);
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { 
             label: Some("texture bind group"),
@@ -197,15 +203,15 @@ impl<'a> State<'a> {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&texture_manager.block_textures().sampler),
                 },
-            ],
-        });
-
+                ],
+            });
+            
         let camera = Camera::new((0.0, 5.0, 1.0), cgmath::Deg(90.0), cgmath::Deg(-20.0));
         let camera_controller = camera::CameraController::new(8.0, 0.8);
         let projection = Projection::new(size.width, size.height, cgmath::Deg(40.), 0.1, 100.0);
         let mut camera_uniform = camera::CameraUniform::new();
         camera_uniform.update_view_proj(&camera, &projection);
-
+            
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
@@ -221,14 +227,18 @@ impl<'a> State<'a> {
             label: Some("camera_bind_group"),
         });
 
-        let mut world = world::World::new("seed".to_string(), 10);
+        let world = Arc::new(Mutex::new(world::World::new("seed".to_string(), 20)));
         let pos = camera.position;
-        world.current_base_chunk = ((pos.x /16.0).floor(), (pos.z / 16.0).floor()).into();
+        {
+            let world_lock = world.clone();
+            let mut world_lock = world_lock.lock().unwrap();
+            world_lock.current_base_chunk = ((pos.x /16.0).floor(), (pos.z / 16.0).floor()).into();
+        }
         
-        world.generate_mesh(&texture_manager, &device);
+        let texture_manager = Arc::new(Mutex::new(texture_manager));
+        let buffers = World::generate_mesh(texture_manager.clone(), device.clone(), world.clone()).await;
 
         let time = crate::time::Time::new();
-
 
         Self {
             window,
@@ -247,6 +257,7 @@ impl<'a> State<'a> {
             time,
             projection,
             texture_manager,
+            buffers
         }
     }
 
@@ -262,7 +273,7 @@ impl<'a> State<'a> {
             self.configure();
         }
         self.projection.resize(self.config.width, self.config.height);
-        *self.texture_manager.depth_texture_mut() = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+        *self.texture_manager.lock().unwrap().depth_texture_mut() = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
     }
 
     pub fn configure(&mut self) {
@@ -293,6 +304,7 @@ impl<'a> State<'a> {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
+        self.generate_chunks();
         self.update_mesh();
 
         self.time.update_update_time();
@@ -326,7 +338,7 @@ impl<'a> State<'a> {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment{
-                    view: &self.texture_manager.depth_texture().view,
+                    view: &self.texture_manager.lock().unwrap().depth_texture().view,
                     depth_ops: Some(wgpu::Operations{
                         load: wgpu::LoadOp::Clear(100.0),
                         store: wgpu::StoreOp::Store,
@@ -340,7 +352,7 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            for (buffer, num) in self.world.buffers.iter() {
+            for (buffer, num) in self.buffers.iter() {
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..*num as u32, 0..1 as u32);
             }
@@ -353,11 +365,28 @@ impl<'a> State<'a> {
         Ok(())
     }
 
+    fn generate_chunks(&mut self) {
+        let world_lock = self.world.lock().unwrap();
+
+        let base_x = world_lock.current_base_chunk.x;
+        let base_z = world_lock.current_base_chunk.y;
+        let world_lock = self.world.lock().unwrap();
+        for i in (base_x as i32 - world_lock.render_distance as i32)..(base_x as i32 + world_lock.render_distance as i32) {
+            for j in (base_z as i32 - world_lock.render_distance as i32)..(base_z as i32 + world_lock.render_distance as i32) {
+                let position = Vector2::new(j as f32, i as f32);
+                let position = (position.x as i64, position.y as i64);
+                let _ = world_lock.chunks.get(&position);
+            }
+        }
+    }
+
     fn update_mesh(&mut self) {
         let (camera_x, camera_z) = ((self.camera.position.x / 16.0).floor(), (self.camera.position.z / 16.0).floor());
-        if self.world.current_base_chunk != (camera_x, camera_z).into() {
-            self.world.current_base_chunk = (camera_x, camera_z).into();
-            self.world.generate_mesh(&self.texture_manager, &self.device);
+
+
+        if self.world.lock().unwrap().current_base_chunk != (camera_x, camera_z).into() {
+            self.world.lock().unwrap().current_base_chunk = (camera_x, camera_z).into();
+            spawn(World::generate_mesh(self.texture_manager.clone(), self.device.clone(), self.world.clone()));
         }
     }
 }
