@@ -1,9 +1,6 @@
 use mine_clone::state::State;
 use winit::{
-    event::*,
-    event_loop::EventLoop,
-    keyboard::{KeyCode, PhysicalKey},
-    window::WindowBuilder,
+    event::*, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::WindowBuilder
 };
 
 #[tokio::main]
@@ -55,7 +52,7 @@ async fn main() {
                         // This tells winit that we want another frame after this one
                         state.window().request_redraw();
 
-                        state.update();
+                        pollster::block_on(state.update());
                         match state.render() {
                             Ok(_) => {}
                             // Reconfigure the surface if it's lost or outdated

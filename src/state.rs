@@ -307,17 +307,10 @@ impl<'a> State<'a> {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
-        match self.chunk_generation_handle.as_ref() {
-            Some(handle) => {
-                if handle.is_finished() {
-                    let new_mesh = tokio::join!(handle);
-                }
-            }
-            None => ()
-        }
 
+       
         self.generate_chunks();
-        self.update_mesh();
+        self.update_mesh().await;
 
         self.time.update_update_time();
     }
@@ -382,9 +375,8 @@ impl<'a> State<'a> {
 
         let base_x = world_lock.current_base_chunk.x;
         let base_z = world_lock.current_base_chunk.y;
-        let world_lock = self.world.lock().unwrap();
-        for i in (base_x as i32 - world_lock.render_distance as i32)..(base_x as i32 + world_lock.render_distance as i32) {
-            for j in (base_z as i32 - world_lock.render_distance as i32)..(base_z as i32 + world_lock.render_distance as i32) {
+        for i in (base_x as i32 - (world_lock.render_distance + 1) as i32)..(base_x as i32 + (world_lock.render_distance + 1) as i32) {
+            for j in (base_z as i32 - (world_lock.render_distance + 1) as i32)..(base_z as i32 + (world_lock.render_distance + 1) as i32) {
                 let position = Vector2::new(j as f32, i as f32);
                 let position = (position.x as i64, position.y as i64);
                 let _ = world_lock.chunks.get(&position);
@@ -392,13 +384,33 @@ impl<'a> State<'a> {
         }
     }
 
-    fn update_mesh(&mut self) {
+    async fn update_mesh(&mut self) {
         let (camera_x, camera_z) = ((self.camera.position.x / 16.0).floor(), (self.camera.position.z / 16.0).floor());
 
-
-        if self.world.lock().unwrap().current_base_chunk != (camera_x, camera_z).into() {
-            self.world.lock().unwrap().current_base_chunk = (camera_x, camera_z).into();
-            self.chunk_generation_handle = Some(spawn(World::generate_mesh(self.texture_manager.clone(), self.device.clone(), self.world.clone())));
+        let handle = std::mem::replace(&mut self.chunk_generation_handle, None);
+        match handle {
+            Some(handle) => {
+                if handle.is_finished() {
+                    let new_mesh = tokio::join!(handle).0;
+                    match new_mesh {
+                        Ok(mesh) => {
+                            self.buffers = mesh;
+                        }
+                        Err(e) => {
+                            log::error!("{:?}", e);
+                        }
+                    }
+                }
+                else {
+                    let _ = std::mem::replace(&mut self.chunk_generation_handle, Some(handle));
+                }
+            }
+            None => {
+                if self.world.lock().unwrap().current_base_chunk != (camera_x, camera_z).into() {
+                    self.world.lock().unwrap().current_base_chunk = (camera_x, camera_z).into();
+                    self.chunk_generation_handle = Some(spawn(World::generate_mesh(self.texture_manager.clone(), self.device.clone(), self.world.clone())));
+                }
+            }
         }
     }
 }
