@@ -5,6 +5,7 @@ use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
 use crate::{camera::{self, Projection, Camera, CameraController}, texture::{TextureManager, Texture}, world::{self, World}, Vertex};
 use tokio::task::spawn;
+use tokio::task::JoinHandle;
 
 pub struct State<'a> {
     surface: wgpu::Surface<'a>,
@@ -26,7 +27,8 @@ pub struct State<'a> {
     pub time: crate::time::Time,
     projection: Projection,
     texture_manager: Arc<Mutex<TextureManager>>,
-    buffers: Vec<(Arc<wgpu::Buffer>, usize)>
+    buffers: Vec<(Arc<wgpu::Buffer>, usize)>,
+    chunk_generation_handle: Option<JoinHandle<Vec<(Arc<wgpu::Buffer>, usize)>>>
 }
 
 impl<'a> State<'a> {
@@ -257,7 +259,8 @@ impl<'a> State<'a> {
             time,
             projection,
             texture_manager,
-            buffers
+            buffers,
+            chunk_generation_handle: None
         }
     }
 
@@ -293,7 +296,7 @@ impl<'a> State<'a> {
         }
     }
 
-    pub fn update(&mut self) {
+    pub async fn update(&mut self) {
         self.time.set_update_start_time();
 
         self.camera_controller.update_camera(&mut self.camera, self.time.delta_time());
@@ -303,6 +306,15 @@ impl<'a> State<'a> {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+
+        match self.chunk_generation_handle.as_ref() {
+            Some(handle) => {
+                if handle.is_finished() {
+                    let new_mesh = tokio::join!(handle);
+                }
+            }
+            None => ()
+        }
 
         self.generate_chunks();
         self.update_mesh();
@@ -386,7 +398,7 @@ impl<'a> State<'a> {
 
         if self.world.lock().unwrap().current_base_chunk != (camera_x, camera_z).into() {
             self.world.lock().unwrap().current_base_chunk = (camera_x, camera_z).into();
-            spawn(World::generate_mesh(self.texture_manager.clone(), self.device.clone(), self.world.clone()));
+            self.chunk_generation_handle = Some(spawn(World::generate_mesh(self.texture_manager.clone(), self.device.clone(), self.world.clone())));
         }
     }
 }
