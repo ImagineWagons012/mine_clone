@@ -33,7 +33,7 @@ impl Chunk {
         match side {
             Cardinal::North => {
                 for (i, plane) in self.block_data.iter().enumerate() {
-                    blocks[i] = plane[plane.len() - 1];
+                    blocks[i] = *plane.last().unwrap();
                 }
             }
             Cardinal::South => {
@@ -242,7 +242,7 @@ impl World {
         let base_z = world_lock.current_base_chunk.y;
         let mut buffers = vec![];
         
-        let mut side_blocks = [[[Block::Air; 16]; 256]; 4];
+        let mut side_blocks = [[[Block::Stone; 16]; 256]; 4];
         for i in (base_x as i32 - world_lock.render_distance as i32)..(base_x as i32 + world_lock.render_distance as i32) {
             for j in (base_z as i32 - world_lock.render_distance as i32)..(base_z as i32 + world_lock.render_distance as i32) {
                 if (i as f32 - base_x).powf(2.0) + (j as f32 - base_z).powf(2.0) > (world_lock.render_distance as f32).powf(2.0) {
@@ -250,23 +250,23 @@ impl World {
                 }
                 let position = Vector2::new(j as f32, i as f32);
                 // North side
-                let position = position + Vector2::unit_x();
-                let chunk = world_lock.get_chunk(position);
+                let position2 = position + Vector2::unit_x();
+                let chunk = world_lock.get_chunk(position2);
                 side_blocks[0] = *chunk.get_side_blocks(Cardinal::South);
                 
                 // South side
-                let position = position - Vector2::unit_x();
-                let chunk = world_lock.get_chunk(position);
+                let position2 = position - Vector2::unit_x();
+                let chunk = world_lock.get_chunk(position2);
                 side_blocks[1] = *chunk.get_side_blocks(Cardinal::North);
                 
                 // East side
-                let position = position + Vector2::unit_y();
-                let chunk = world_lock.get_chunk(position);
+                let position2 = position + Vector2::unit_y();
+                let chunk = world_lock.get_chunk(position2);
                 side_blocks[3] = *chunk.get_side_blocks(Cardinal::West);
                 
-                // South side
-                let position = position - Vector2::unit_y();
-                let chunk = world_lock.get_chunk(position);
+                // West side
+                let position2 = position - Vector2::unit_y();
+                let chunk = world_lock.get_chunk(position2);
                 side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
 
                 let buffer_num = world_lock.get_chunk_mut(position).get_or_generate_mesh(&texture_manager.lock().unwrap(), &side_blocks, &device);

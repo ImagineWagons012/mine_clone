@@ -8,7 +8,7 @@ async fn main() {
     env_logger::builder()
     .target(env_logger::Target::Stdout)
     .format_timestamp(None)
-    .filter_level(log::LevelFilter::Off)
+    .filter_level(log::LevelFilter::Info)
     .init();
 
     let event_loop = EventLoop::new().unwrap();
