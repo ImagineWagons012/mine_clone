@@ -1,5 +1,5 @@
 use crate::{Cardinal, texture::TextureManager};
-
+use std::sync::Arc;
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -14,7 +14,7 @@ pub enum Block {
 }
 
 
-pub fn get_block_texture_ids(block: Block, texture_manager: &TextureManager) -> [f32; 6] {
+pub async fn get_block_texture_ids(block: Block, texture_manager: Arc<TextureManager>) -> [f32; 6] {
     let mut indexes = [0.; 6];
     match block {
         Block::Grass => {

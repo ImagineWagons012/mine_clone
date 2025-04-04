@@ -1,4 +1,6 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{collections::HashMap, sync::Arc};
+
+use tokio::sync::Mutex;
 
 use crate::{
     block::{get_block_texture_ids, Block},
@@ -15,6 +17,7 @@ pub struct Chunk {
     block_data: [[[Block; 16]; 16]; 256],
     position: Vector2<f32>,
     buffer: Option<(Arc<wgpu::Buffer>, usize)>,
+    buffers_created: u32,
 }
 
 impl Chunk {
@@ -23,7 +26,8 @@ impl Chunk {
         Self {
             block_data,
             position: position.into(),
-            buffer: None
+            buffer: None,
+            buffers_created: 0
         }
     }
 
@@ -59,9 +63,9 @@ impl Chunk {
         }
         blocks
     }
-    pub fn generate_mesh(
+    pub async fn generate_mesh(
         &mut self,
-        texture_manager: &TextureManager,
+        texture_manager: Arc<TextureManager>,
         side_blocks: &[[[Block; 16]; 256]; 4],
         device: &wgpu::Device
     ) -> (Arc<wgpu::Buffer>, usize) {
@@ -125,7 +129,7 @@ impl Chunk {
                         .into();
 
                     if let None = texture_id_cache.get(&current) {
-                        let textures = get_block_texture_ids(current, texture_manager);
+                        let textures = get_block_texture_ids(current, texture_manager.clone()).await;
                         texture_id_cache.insert(current, textures);
                     }
                     let textures = texture_id_cache.get(&current).unwrap();
@@ -174,6 +178,8 @@ impl Chunk {
                 }
             }
         }
+
+        self.buffers_created += 1;
         self.buffer = Some((Arc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(format!("vertex_buffer, x: {}, z: {}", self.position.x, self.position.y).as_str()),
             contents: bytemuck::cast_slice(&vertices),
@@ -182,13 +188,13 @@ impl Chunk {
         self.buffer.as_ref().unwrap().clone()
         
     }
-    pub fn get_or_generate_mesh(&mut self, texture_manager: &TextureManager, side_blocks: &[[[Block; 16]; 256]; 4], device: &wgpu::Device) -> (Arc<wgpu::Buffer>, usize) {
+    pub async fn get_or_generate_mesh(&mut self, texture_manager: Arc<TextureManager>, side_blocks: &[[[Block; 16]; 256]; 4], device: &wgpu::Device) -> (Arc<wgpu::Buffer>, usize) {
         match self.buffer.as_ref() {
             Some((buffer, len)) => {
                 (buffer.clone(), *len)
             }
             None => {
-                self.generate_mesh(texture_manager, side_blocks, device)
+                self.generate_mesh(texture_manager, side_blocks, device).await
             }
         }
     }
@@ -199,7 +205,8 @@ impl Default for Chunk {
         Self {
             block_data: [[[Block::default(); 16]; 16]; 256],
             position: (0.0, 0.0).into(),
-            buffer: None
+            buffer: None,
+            buffers_created: 0
         }
     }
 }
@@ -208,9 +215,8 @@ pub struct World {
     pub chunks: HashMap<(i64, i64), Chunk>,
     seed: [u8; 32],
     seed_string: String,
-    pub current_base_chunk: Vector2<f32>,
-    pub buffers: Vec<(Arc<wgpu::Buffer>, usize)>,
-    pub render_distance: u32
+    pub render_distance: u32,
+    buffers_created: u32
 }
 
 impl World {
@@ -224,29 +230,35 @@ impl World {
             chunks: HashMap::new(),
             seed,
             seed_string,
-            current_base_chunk: (0.0, 0.0).into(),
-            buffers: vec![],
-            render_distance
+            render_distance,
+            buffers_created: 0
         }
     }
+    
     pub async fn generate_mesh(
-        texture_manager: Arc<Mutex<TextureManager>>, 
+        texture_manager: Arc<TextureManager>, 
         device: Arc<wgpu::Device>, 
-        world: Arc<Mutex<World>>
+        world: Arc<Mutex<World>>,
+        cam_pos: (f32, f32)
     ) -> Vec<(Arc<wgpu::Buffer>, usize)> {
-        // for (buffer, _) in &self.buffers {
-        //     buffer.destroy();
-        // }
-        let mut world_lock = world.lock().unwrap();
-        let base_x = world_lock.current_base_chunk.x;
-        let base_z = world_lock.current_base_chunk.y;
+        log::info!("mesh gen: waiting on world lock");
+        let mut world_lock = world.lock().await;
+        log::info!("mesh gen: got world lock");
+        let base_x = cam_pos.0 / 16.0;
+        let base_z = cam_pos.1 / 16.0;
         let mut buffers = vec![];
         
         let mut side_blocks = [[[Block::Stone; 16]; 256]; 4];
-        for i in (base_x as i32 - world_lock.render_distance as i32)..(base_x as i32 + world_lock.render_distance as i32) {
-            for j in (base_z as i32 - world_lock.render_distance as i32)..(base_z as i32 + world_lock.render_distance as i32) {
+        for i in (base_x as i32 - (world_lock.render_distance + 10) as i32)..(base_x as i32 + (world_lock.render_distance + 10) as i32) {
+            for j in (base_z as i32 - (world_lock.render_distance + 10) as i32)..(base_z as i32 + (world_lock.render_distance + 10) as i32) {
                 if (i as f32 - base_x).powf(2.0) + (j as f32 - base_z).powf(2.0) > (world_lock.render_distance as f32).powf(2.0) {
                     continue;
+                }
+                if (i as f32 - base_x).powf(2.0) + (j as f32 - base_z).powf(2.0) > ((world_lock.render_distance + 5) as f32).powf(2.0) {
+                    let chunk = world_lock.get_chunk_mut(Vector2::new(j as f32, i as f32));
+                    chunk.buffer.as_ref().unwrap().0.destroy();
+                    chunk.buffer = None;
+                    
                 }
                 let position = Vector2::new(j as f32, i as f32);
                 // North side
@@ -269,23 +281,16 @@ impl World {
                 let chunk = world_lock.get_chunk(position2);
                 side_blocks[2] = *chunk.get_side_blocks(Cardinal::East);
 
-                let buffer_num = world_lock.get_chunk_mut(position).get_or_generate_mesh(&texture_manager.lock().unwrap(), &side_blocks, &device);
+                let buffer_num = world_lock.get_chunk_mut(position).get_or_generate_mesh(texture_manager.clone(), &side_blocks, &device).await;
                 buffers.push(buffer_num);
            }
         }
+        world_lock.buffers_created = world_lock.chunks.iter().map(|x| x.1.buffers_created).sum();
+        log::info!("buffers created: {}", world_lock.buffers_created);
+        log::info!("returning mesh");
         return buffers;
     }
 
-    fn get_chunk(&mut self, position: Vector2<f32>) -> &Chunk {
-        let i_position = (position.x as i64, position.y as i64);
-        if self.is_chunk_available(&i_position) {
-            return self.chunks.get(&i_position).unwrap();
-        }
-        else {
-            self.generate_chunk(position);
-            return self.chunks.get(&i_position).unwrap();
-        }
-    }
     fn is_chunk_available(&self, position: &(i64, i64)) -> bool {
         match self.chunks.get(position) {
             Some(_) => {
@@ -294,6 +299,16 @@ impl World {
             None => {
                 false
             }
+        }
+    }
+    fn get_chunk(&mut self, position: Vector2<f32>) -> &Chunk {
+        let i_position = (position.x as i64, position.y as i64);
+        if self.is_chunk_available(&i_position) {
+            return self.chunks.get(&i_position).unwrap();
+        }
+        else {
+            self.generate_chunk(position);
+            return self.chunks.get(&i_position).unwrap();
         }
     }
     fn get_chunk_mut(&mut self, position: Vector2<f32>) -> &mut Chunk {
@@ -305,17 +320,16 @@ impl World {
             self.generate_chunk(position);
             return self.chunks.get_mut(&i_position).unwrap();
         }
-    }
-    
+    }   
     pub fn generate_chunk(&mut self, at_position: Vector2<f32>) {
         let perlin = Perlin::new(self.seed[0] as u32);
         let mut chunk = Chunk::new(at_position);
         for x in 0..16 {
             for z in 0..16 {
                 let y =
-                    25.0 * perlin.get([
-                        5.0e-1 * (x as f32 / 16.0 + chunk.position.x) as f64,
-                        5.0e-1 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                    10.0 * perlin.get([
+                        3.0e-1 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                        3.0e-1 * (z as f32 / 16.0 + chunk.position.y) as f64,
                     ]) 
                     + 50.0
                         * perlin.get([
@@ -329,15 +343,15 @@ impl World {
                         ])
                     + 100.0
                         * perlin.get([
-                            5.0e-4 * (x as f32 / 16.0 + chunk.position.x) as f64,
-                            5.0e-4 * (z as f32 / 16.0 + chunk.position.y) as f64,
+                            5.0e-7 * (x as f32 / 16.0 + chunk.position.x) as f64,
+                            5.0e-7 * (z as f32 / 16.0 + chunk.position.y) as f64,
                         ]);
                             
                 // println!("{:?}", y);
-                let y = (y / (25.0 + 50.0 + 75.0 + 100.0) + 1.0) / 2.0;
+                let y = (y / (10.0 + 50.0 + 75.0 + 100.0) + 1.0) / 2.0;
                 let y = (y).powf(2.5);
-                let y = (y * 190.0 + 20.0).clamp(0.0, 255.0);
-                let y = y.floor() as usize;
+                let y = (y * 190.0 + 20.0).floor().clamp(0.0, 255.0);
+                let y = y as usize;
                 chunk.block_data[y][x][z] = Block::Grass;
                 for height in (0..y).rev() {
                     chunk.block_data[height][x][z] = Block::Dirt;

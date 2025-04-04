@@ -1,9 +1,9 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
-use cgmath::Vector2;
 use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
-use crate::{camera::{self, Projection, Camera, CameraController}, texture::{TextureManager, Texture}, world::{self, World}, Vertex};
+use crate::{camera::{self, Camera, CameraController, Projection}, texture::{self, Texture, TextureManager}, world::{self, World}, Vertex};
 use tokio::task::spawn;
 use tokio::task::JoinHandle;
 
@@ -26,9 +26,12 @@ pub struct State<'a> {
     world: Arc<Mutex<World>>,
     pub time: crate::time::Time,
     projection: Projection,
-    texture_manager: Arc<Mutex<TextureManager>>,
-    buffers: Vec<(Arc<wgpu::Buffer>, usize)>,
-    chunk_generation_handle: Option<JoinHandle<Vec<(Arc<wgpu::Buffer>, usize)>>>
+    texture_manager: Arc<TextureManager>,
+    buffers: [Vec<(Arc<wgpu::Buffer>, usize)>; 2],
+    active_buffer: usize,
+    chunk_generation_handle: Option<JoinHandle<Vec<(Arc<wgpu::Buffer>, usize)>>>,
+    depth_texture: texture::Texture,
+    current_base_chunk: (f32, f32)
 }
 
 impl<'a> State<'a> {
@@ -192,23 +195,23 @@ impl<'a> State<'a> {
         });
         
         
-        let texture_manager = TextureManager::new(&device, &config, &queue);
+        let texture_manager = TextureManager::new(&device, &queue);
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { 
             label: Some("texture bind group"),
             layout: &texture_bind_group_layout, 
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_manager.block_textures().view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&texture_manager.block_textures().sampler),
-                },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture_manager.block_textures().view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&texture_manager.block_textures().sampler),
+                    },
                 ],
             });
             
-        let camera = Camera::new((0.0, 5.0, 1.0), cgmath::Deg(90.0), cgmath::Deg(-20.0));
+        let camera = Camera::new((0.0, 100.0, 2000.0), cgmath::Deg(90.0), cgmath::Deg(-20.0));
         let camera_controller = camera::CameraController::new(8.0, 0.8);
         let projection = Projection::new(size.width, size.height, cgmath::Deg(40.), 0.1, 100.0);
         let mut camera_uniform = camera::CameraUniform::new();
@@ -230,17 +233,18 @@ impl<'a> State<'a> {
         });
 
         let world = Arc::new(Mutex::new(world::World::new("seed".to_string(), 20)));
-        let pos = camera.position;
-        {
-            let world_lock = world.clone();
-            let mut world_lock = world_lock.lock().unwrap();
-            world_lock.current_base_chunk = ((pos.x /16.0).floor(), (pos.z / 16.0).floor()).into();
-        }
         
-        let texture_manager = Arc::new(Mutex::new(texture_manager));
-        let buffers = World::generate_mesh(texture_manager.clone(), device.clone(), world.clone()).await;
+        let texture_manager = Arc::new(texture_manager);
+        let mut buffers = [vec![], vec![]];
+        let active_buffer = 0;
+        buffers[active_buffer] = World::generate_mesh(
+            texture_manager.clone(), 
+            device.clone(),
+            world.clone(), 
+            (camera.position.x, camera.position.z)).await;
 
         let time = crate::time::Time::new();
+        let depth_texture = Texture::create_depth_texture(&device, &config, "Depth Texture");
 
         Self {
             window,
@@ -260,7 +264,10 @@ impl<'a> State<'a> {
             projection,
             texture_manager,
             buffers,
-            chunk_generation_handle: None
+            active_buffer,
+            chunk_generation_handle: None,
+            depth_texture,
+            current_base_chunk: (0.0, 0.0)
         }
     }
 
@@ -268,7 +275,7 @@ impl<'a> State<'a> {
         self.window
     }
 
-    pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+    pub async fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
@@ -276,7 +283,7 @@ impl<'a> State<'a> {
             self.configure();
         }
         self.projection.resize(self.config.width, self.config.height);
-        *self.texture_manager.lock().unwrap().depth_texture_mut() = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+        self.depth_texture = Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
     }
 
     pub fn configure(&mut self) {
@@ -297,6 +304,7 @@ impl<'a> State<'a> {
     }
 
     pub async fn update(&mut self) {
+        log::info!("update");
         self.time.set_update_start_time();
 
         self.camera_controller.update_camera(&mut self.camera, self.time.delta_time());
@@ -306,17 +314,15 @@ impl<'a> State<'a> {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
-
-
        
-        self.generate_chunks();
         self.update_mesh().await;
 
         self.time.update_update_time();
     }
 
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub async fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.time.set_render_start_time();
+        log::info!("render");
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -334,16 +340,16 @@ impl<'a> State<'a> {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.3,
+                            g: 0.5,
+                            b: 0.8,
                             a: 1.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment{
-                    view: &self.texture_manager.lock().unwrap().depth_texture().view,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
                     depth_ops: Some(wgpu::Operations{
                         load: wgpu::LoadOp::Clear(100.0),
                         store: wgpu::StoreOp::Store,
@@ -357,7 +363,7 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            for (buffer, num) in self.buffers.iter() {
+            for (buffer, num) in self.buffers[self.active_buffer].iter() {
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
                 render_pass.draw(0..*num as u32, 0..1 as u32);
             }
@@ -370,45 +376,49 @@ impl<'a> State<'a> {
         Ok(())
     }
 
-    fn generate_chunks(&mut self) {
-        let world_lock = self.world.lock().unwrap();
-
-        let base_x = world_lock.current_base_chunk.x;
-        let base_z = world_lock.current_base_chunk.y;
-        for i in (base_x as i32 - (world_lock.render_distance + 1) as i32)..(base_x as i32 + (world_lock.render_distance + 1) as i32) {
-            for j in (base_z as i32 - (world_lock.render_distance + 1) as i32)..(base_z as i32 + (world_lock.render_distance + 1) as i32) {
-                let position = Vector2::new(j as f32, i as f32);
-                let position = (position.x as i64, position.y as i64);
-                let _ = world_lock.chunks.get(&position);
-            }
-        }
-    }
-
     async fn update_mesh(&mut self) {
+        log::info!("mesh update");
         let (camera_x, camera_z) = ((self.camera.position.x / 16.0).floor(), (self.camera.position.z / 16.0).floor());
 
-        let handle = std::mem::replace(&mut self.chunk_generation_handle, None);
+        let handle = std::mem::take(&mut self.chunk_generation_handle);
+        log::info!("got handle");
+        log::info!("handle: {:?}", handle);
+        log::info!("cam_pos: {:?}", self.camera.position);
         match handle {
             Some(handle) => {
+                log::info!("there is a handle");
                 if handle.is_finished() {
-                    let new_mesh = tokio::join!(handle).0;
-                    match new_mesh {
-                        Ok(mesh) => {
-                            self.buffers = mesh;
-                        }
-                        Err(e) => {
-                            log::error!("{:?}", e);
-                        }
-                    }
+                    self.active_buffer = match self.active_buffer {
+                        0 => 1,
+                        _ => 0
+                    };
+                    log::info!("mesh ready");
+                    let buffers = handle.await;
+                    self.buffers[self.active_buffer] = buffers.unwrap();
+                    self.chunk_generation_handle = None;
                 }
                 else {
-                    let _ = std::mem::replace(&mut self.chunk_generation_handle, Some(handle));
+                    log::info!("waiting on new mesh");
+                    std::mem::swap(&mut self.chunk_generation_handle, &mut Some(handle));
                 }
             }
             None => {
-                if self.world.lock().unwrap().current_base_chunk != (camera_x, camera_z).into() {
-                    self.world.lock().unwrap().current_base_chunk = (camera_x, camera_z).into();
-                    self.chunk_generation_handle = Some(spawn(World::generate_mesh(self.texture_manager.clone(), self.device.clone(), self.world.clone())));
+                log::info!("test if new mesh is needed");
+                if self.current_base_chunk != (camera_x, camera_z).into() {
+                    self.current_base_chunk = (camera_x, camera_z).into();
+                    log::info!("spawning thread for mesh generation");
+                    let inactive_buffer = match self.active_buffer {
+                        0 => 1,
+                        _ => 0
+                    };
+                    log::info!("active: {}, inactive: {}", self.active_buffer, inactive_buffer);
+                    self.chunk_generation_handle = Some(spawn(
+                        World::generate_mesh(
+                            self.texture_manager.clone(), 
+                            self.device.clone(), 
+                            self.world.clone(),
+                            (self.camera.position.x, self.camera.position.z)
+                    )));
                 }
             }
         }

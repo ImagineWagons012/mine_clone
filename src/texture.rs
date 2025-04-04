@@ -199,27 +199,18 @@ impl Texture {
 
 
 pub struct TextureManager {
-    depth_texture: Texture,
     block_textures: Texture,
     name_to_id: HashMap<String, f32>,
 }
 
 impl TextureManager {
-    pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, queue: &wgpu::Queue) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let (block_textures, name_to_id) = Self::load_textures("./assets/textures", device, queue, Some("block_textures"));
-        Self { 
-            depth_texture: Texture::create_depth_texture(device, config, "Depth Texture"), 
+        Self {
             block_textures,
             name_to_id 
         }
     }
-    pub fn depth_texture(&self) -> &Texture {
-        &self.depth_texture
-    }
-    pub fn depth_texture_mut(&mut self) -> &mut Texture {
-        &mut self.depth_texture
-    }
-
     pub fn block_textures(&self) -> &Texture {
         &self.block_textures
     }

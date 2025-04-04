@@ -35,7 +35,7 @@ async fn main() {
             if !state.input(event) {
                 match event {
                     WindowEvent::Resized(physical_size) => {
-                        state.resize(*physical_size);
+                        pollster::block_on(state.resize(*physical_size));
                     }
                     WindowEvent::CloseRequested
                     | WindowEvent::KeyboardInput {
@@ -50,14 +50,15 @@ async fn main() {
                     WindowEvent::RedrawRequested => {
                         state.time.set_frame_start_time();
                         // This tells winit that we want another frame after this one
+                        log::info!("request redraw");
                         state.window().request_redraw();
 
                         pollster::block_on(state.update());
-                        match state.render() {
+                        match pollster::block_on(state.render()) {
                             Ok(_) => {}
                             // Reconfigure the surface if it's lost or outdated
                             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                state.resize(state.size)
+                                pollster::block_on(state.resize(state.size))
                             }
                             // The system is out of memory, we should probably quit
                             Err(wgpu::SurfaceError::OutOfMemory) => {

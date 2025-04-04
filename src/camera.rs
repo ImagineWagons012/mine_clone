@@ -164,7 +164,7 @@ impl CameraController {
                         true
                     }
                     KeyCode::ControlLeft => {
-                        self.speed_boost = amount * 2.0 + 1.0;
+                        self.speed_boost = amount * 8.0 + 1.0;
                         true
                     }
                     _ => false,
