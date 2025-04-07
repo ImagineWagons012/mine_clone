@@ -1,42 +1,81 @@
 use mine_clone::state::State;
+use tokio::{runtime::Builder, sync::mpsc};
 use winit::{
-    event::*, event_loop::EventLoop, keyboard::{KeyCode, PhysicalKey}, window::WindowBuilder
+    event::*,
+    event_loop::EventLoop,
+    keyboard::{KeyCode, PhysicalKey},
+    window::WindowBuilder,
 };
 
-#[tokio::main]
-async fn main() {
+fn main() {
     env_logger::builder()
-    .target(env_logger::Target::Stdout)
-    .format_timestamp(None)
-    .filter_level(log::LevelFilter::Info)
-    .init();
+        .target(env_logger::Target::Stdout)
+        .format_timestamp(None)
+        .filter_level(log::LevelFilter::Error)
+        .init();
+
+    let runtime = Builder::new_multi_thread().worker_threads(8).enable_all().build().unwrap();
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
-
-    let mut state = State::new(&window).await;
-    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(window.current_monitor().unwrap()))));
+    window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
     window.set_cursor_visible(false);
-    state.configure();
 
-    let _ = event_loop.run(move |event, control_flow| match event {
-        Event::DeviceEvent { event, .. } => {
-            match event {
-                DeviceEvent::MouseMotion { delta } => {
-                    state.camera_controller.process_mouse(delta.0, delta.1);
-                }
-                _ => {}
-            }
-        },
-        Event::WindowEvent {
-            ref event,
-            window_id,
-        } if window_id == state.window.id() => {
-            if !state.input(event) {
-                match event {
-                    WindowEvent::Resized(physical_size) => {
-                        pollster::block_on(state.resize(*physical_size));
+    runtime.block_on(async {
+        let mut state = State::new(window).await;
+        state.configure();
+
+        runtime.spawn(async move {
+            'main_loop: loop {
+                let event = event_rx.recv().await.unwrap();
+                match &event {
+                    Event::LoopExiting => {
+                        break 'main_loop;
                     }
+                    Event::DeviceEvent { event, .. } => match event {
+                        DeviceEvent::MouseMotion { delta } => {
+                            state.camera_controller.process_mouse(delta.0, delta.1);
+                        }
+                        _ => {}
+                    },
+                    Event::WindowEvent { event, .. } => {
+                        if !state.input(event) {
+                            match event {
+                                WindowEvent::RedrawRequested => {
+                                    state.window.request_redraw();
+                                    state.update().await;
+                                    match state.render() {
+                                        Ok(_) => (),
+                                        Err(wgpu::SurfaceError::OutOfMemory) => {
+                                            log::error!("Out of memory")
+                                        }
+                                        Err(wgpu::SurfaceError::Timeout) => {
+                                            log::warn!("Surface Timeout")
+                                        }
+                                        Err(
+                                            wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated,
+                                        ) => state.resize(state.size),
+                                    }
+                                }
+                                WindowEvent::Resized(size) => {
+                                    state.resize(*size);
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+        });
+    });
+
+    let _ = event_loop.run(move |event, control_flow| {
+        match &event {
+            Event::WindowEvent {
+                event:
                     WindowEvent::CloseRequested
                     | WindowEvent::KeyboardInput {
                         event:
@@ -46,43 +85,14 @@ async fn main() {
                                 ..
                             },
                         ..
-                    } => control_flow.exit(),
-                    WindowEvent::RedrawRequested => {
-                        state.time.set_frame_start_time();
-                        // This tells winit that we want another frame after this one
-                        log::info!("request redraw");
-                        state.window().request_redraw();
-
-                        pollster::block_on(state.update());
-                        match pollster::block_on(state.render()) {
-                            Ok(_) => {}
-                            // Reconfigure the surface if it's lost or outdated
-                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                pollster::block_on(state.resize(state.size))
-                            }
-                            // The system is out of memory, we should probably quit
-                            Err(wgpu::SurfaceError::OutOfMemory) => {
-                                log::error!("OutOfMemory");
-                                control_flow.exit();
-                            }
-
-                            // This happens when the a frame takes too long to present
-                            Err(wgpu::SurfaceError::Timeout) => {
-                                log::warn!("Surface timeout")
-                            }
-                        }
-                        state.time.update_frame_time();
-                        log::info!(
-                            "frame time: {}, fps: {}, CPU time: {}, GPU time: {}", 
-                            state.time.delta_time() * 1000.0, 1.0 / state.time.delta_time(), 
-                            state.time.cpu_time() * 1000.0, state.time.gpu_time() * 1000.0
-                        );
-                    }
-                    _ => {}
-                }
-            }
-        },
-        
-        _ => {}
+                    },
+                ..
+            } => control_flow.exit(),
+            // Event::WindowEvent { window_id: _, event: WindowEvent::RedrawRequested } => {
+            //     window.request_redraw();
+            // } 
+            _ => (),
+        }
+        event_tx.send(event).unwrap();
     });
 }
