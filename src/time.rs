@@ -5,7 +5,7 @@ pub struct Time {
     frame_start_time: Instant,
     update_start_time: Instant,
     render_start_time: Instant,
-    render_duration: Duration,
+    pub render_duration: Duration,
     update_duration: Duration,
     pub frame_time: Duration,
 }

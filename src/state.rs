@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, time::Instant};
 
 use winit::{event::{KeyEvent, WindowEvent}, window::Window};
 use wgpu::util::DeviceExt;
@@ -24,9 +24,9 @@ pub struct State {
     pub time: crate::time::Time,
     projection: Projection,
     texture_manager: Arc<TextureManager>,
-    buffers: Vec<(Arc<wgpu::Buffer>, usize)>,
+    buffers: [Arc<Mutex<Vec<(Arc<wgpu::Buffer>, usize)>>>; 2],
     active_buffer: usize,
-    chunk_generation_handle: Option<JoinHandle<Vec<(Arc<wgpu::Buffer>, usize)>>>,
+    chunk_generation_handle: Option<JoinHandle<()>>,
     depth_texture: texture::Texture,
     current_base_chunk: (f32, f32)
 }
@@ -167,7 +167,7 @@ impl State {
                 // Requires Features::CONSERVATIVE_RASTERIZATION
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState{
+            depth_stencil: Some(wgpu::DepthStencilState {
                 format: Texture::DEPTH_FORMAT,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
@@ -228,12 +228,13 @@ impl State {
         
         let texture_manager = Arc::new(texture_manager);
         let active_buffer = 0;
-        let buffers = World::generate_mesh(
+        let buffers = [Arc::new(Mutex::new(vec![])), Arc::new(Mutex::new(vec![]))];
+        World::generate_mesh(
             texture_manager.clone(), 
             device.clone(),
             world.clone(), 
-            (camera.position.x, camera.position.z)).await;
-
+            (camera.position.x, camera.position.z),
+            buffers[0].clone()).await;
         let time = crate::time::Time::new();
         let depth_texture = Texture::create_depth_texture(&device, &config, "Depth Texture");
 
@@ -292,6 +293,7 @@ impl State {
 
     pub async fn update(&mut self) {
         log::info!("update");
+        log::info!("total chunks created: {}", self.world.lock().await.chunks.len());
         self.time.set_update_start_time();
 
         self.camera_controller.update_camera(&mut self.camera, self.time.delta_time());
@@ -307,7 +309,7 @@ impl State {
         self.time.update_update_time();
     }
 
-    pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+    pub async fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         self.time.set_render_start_time();
         log::info!("render");
         let output = self.surface.get_current_texture()?;
@@ -319,6 +321,8 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+        let active_buffer = self.buffers[self.active_buffer].lock().await;
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
@@ -348,37 +352,48 @@ impl State {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.bind_groups[0], &[]);
             render_pass.set_bind_group(1, &self.bind_groups[1], &[]);
-            for (buffer, num) in self.buffers.iter() {
+            for (buffer, num) in active_buffer.iter() {
                 render_pass.set_vertex_buffer(0, buffer.slice(..));
-                render_pass.draw(0..*num as u32, 0..1 as u32);
+                render_pass.draw(0..*num as u32, 0..1);
             }
+            log::info!("vertex count: {}", active_buffer.iter().map(|x| x.1).sum::<usize>());
         }
         // submit will accept anything that implements IntoIter
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         self.time.update_render_time();
+        log::info!("render time: {}ms", self.time.render_duration.as_secs_f32() * 1000.0);
         Ok(())
     }
 
     async fn update_mesh(&mut self) {
+        let start = Instant::now();
         log::info!("mesh update");
         let (camera_x, camera_z) = ((self.camera.position.x / 16.0).floor(), (self.camera.position.z / 16.0).floor());
 
         let handle = std::mem::take(&mut self.chunk_generation_handle);
-        
+        let inactive_buffer = match self.active_buffer {
+            0 => 1,
+            _ => 0
+        };
         match handle {
             Some(handle) => {
+                log::info!("there is a handle");
                 if handle.is_finished() {
+                    
+                    let join_time = Instant::now();
                     log::info!("mesh finished");
-                    let buffers = handle.await;
-                    match buffers {
-                        Ok(buffers) => self.buffers = buffers,
-                        Err(e) => {
-                            log::error!("{}", e);
-                        }
-                    }
+                    // let buffers = handle.await;
+                    // match buffers {
+                    //     Ok(buffers) => self.buffers[inactive_buffer] = buffers,
+                    //     Err(e) => {
+                    //         log::error!("{}", e);
+                    //     }
+                    // }
                     self.chunk_generation_handle = None;
+                    self.active_buffer = inactive_buffer;
+                    log::info!("join time: {}ms", join_time.elapsed().as_secs_f32() * 1000.0);
                 }
                 else {
                     log::info!("waiting on new mesh");
@@ -394,10 +409,13 @@ impl State {
                             self.texture_manager.clone(), 
                             self.device.clone(), 
                             self.world.clone(),
-                            (self.camera.position.x, self.camera.position.z)
+                            (self.camera.position.x, self.camera.position.z),
+                            self.buffers[inactive_buffer].clone()
                     )));
                 }
+
             }
         }
+        log::info!("mesh update time: {}", start.elapsed().as_secs_f32() * 1000.0);
     }
 }

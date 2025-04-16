@@ -11,10 +11,10 @@ fn main() {
     env_logger::builder()
         .target(env_logger::Target::Stdout)
         .format_timestamp(None)
-        .filter_level(log::LevelFilter::Error)
+        .filter_level(log::LevelFilter::Info)
         .init();
 
-    let runtime = Builder::new_multi_thread().worker_threads(8).enable_all().build().unwrap();
+    let runtime = Builder::new_multi_thread().worker_threads(8).build().unwrap();
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
@@ -44,9 +44,10 @@ fn main() {
                         if !state.input(event) {
                             match event {
                                 WindowEvent::RedrawRequested => {
+                                    state.time.set_frame_start_time();
                                     state.window.request_redraw();
                                     state.update().await;
-                                    match state.render() {
+                                    match state.render().await {
                                         Ok(_) => (),
                                         Err(wgpu::SurfaceError::OutOfMemory) => {
                                             log::error!("Out of memory")
@@ -58,6 +59,8 @@ fn main() {
                                             wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated,
                                         ) => state.resize(state.size),
                                     }
+                                    state.time.update_frame_time();
+                                    log::info!("frame time: {}ms", state.time.frame_time.as_secs_f32() * 1000.0, );
                                 }
                                 WindowEvent::Resized(size) => {
                                     state.resize(*size);

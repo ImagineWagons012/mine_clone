@@ -1,3 +1,5 @@
 /target
 /assets/textures/*.png
 /assets/textures/*.mcmeta
+/0.*
+/1.*

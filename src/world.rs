@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, time::Instant};
 
 use crate::{
     block::{get_block_texture_ids, Block},
@@ -239,8 +239,10 @@ impl World {
         texture_manager: Arc<TextureManager>, 
         device: Arc<wgpu::Device>, 
         world: Arc<Mutex<World>>,
-        cam_pos: (f32, f32)
-    ) -> Vec<(Arc<wgpu::Buffer>, usize)> {
+        cam_pos: (f32, f32),
+        inactive_buffer: Arc<Mutex<Vec<(Arc<wgpu::Buffer>, usize)>>>
+    ) {
+        let start = Instant::now();
         log::info!("mesh gen: waiting on world lock");
         let mut world_lock = world.lock().await;
         log::info!("mesh gen: got world lock");
@@ -287,8 +289,8 @@ impl World {
         }
         world_lock.buffers_created = world_lock.chunks.iter().map(|x| x.1.buffers_created).sum();
         log::info!("buffers created: {}", world_lock.buffers_created);
-        log::info!("returning mesh");
-        return buffers;
+        log::info!("returning mesh, done in {}ms", start.elapsed().as_secs_f32() * 1000.0);
+        *inactive_buffer.lock().await = buffers;
     }
 
     fn is_chunk_available(&self, position: &(i64, i64)) -> bool {
